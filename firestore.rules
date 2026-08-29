@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // User profiles: authenticated users can read, users can create/update their own profile
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) && (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']) ||
+        resource.data.role == request.resource.data.role
+      );
+      allow delete: if false;
+    }
+    
+    // Workspaces
+    match /workspaces/{workspaceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+      
+      match /members/{memberId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+    
+    // Projects, repositories, issues, comments, attachments, investigations
+    match /projects/{projectId} {
+      allow read, write: if isAuthenticated();
+      
+      match /repositories/{repositoryId} {
+        allow read, write: if isAuthenticated();
+      }
+      
+      match /issues/{issueId} {
+        allow read, write: if isAuthenticated();
+        
+        match /comments/{commentId} {
+          allow read, write: if isAuthenticated();
+        }
+        
+        match /attachments/{attachmentId} {
+          allow read, write: if isAuthenticated();
+        }
+      }
+      
+      match /investigations/{investigationId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+    
+    // User notifications
+    match /notifications/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      match /items/{notificationId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+    
+    // Activity logs
+    match /activityLogs/{workspaceId} {
+      allow read, write: if isAuthenticated();
+      
+      match /events/{eventId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+  }
+}

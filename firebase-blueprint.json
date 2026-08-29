@@ -1,0 +1,88 @@
+{
+  "entities": {
+    "UserProfile": {
+      "collection": "users",
+      "fields": {
+        "uid": { "type": "string", "required": true },
+        "displayName": { "type": "string", "required": true },
+        "email": { "type": "string", "required": true },
+        "photoURL": { "type": "string", "required": false },
+        "providerId": { "type": "string", "required": true },
+        "role": { "type": "string", "required": true },
+        "createdAt": { "type": "string", "required": true },
+        "lastLoginAt": { "type": "string", "required": true }
+      }
+    },
+    "Workspace": {
+      "collection": "workspaces",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "name": { "type": "string", "required": true },
+        "ownerId": { "type": "string", "required": true },
+        "createdAt": { "type": "string", "required": true }
+      }
+    },
+    "Project": {
+      "collection": "projects",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "workspaceId": { "type": "string", "required": true },
+        "name": { "type": "string", "required": true },
+        "description": { "type": "string", "required": false },
+        "repo": { "type": "string", "required": false },
+        "branch": { "type": "string", "required": false },
+        "createdAt": { "type": "string", "required": true },
+        "updatedAt": { "type": "string", "required": true }
+      }
+    },
+    "Issue": {
+      "collection": "projects/{projectId}/issues",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "projectId": { "type": "string", "required": true },
+        "title": { "type": "string", "required": true },
+        "description": { "type": "string", "required": true },
+        "stepsToReproduce": { "type": "string", "required": true },
+        "expectedResult": { "type": "string", "required": true },
+        "actualResult": { "type": "string", "required": true },
+        "severity": { "type": "string", "required": true },
+        "priority": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true },
+        "reporterId": { "type": "string", "required": true },
+        "reporterName": { "type": "string", "required": true },
+        "assigneeId": { "type": "string", "required": false },
+        "assigneeName": { "type": "string", "required": false },
+        "rootCause": { "type": "string", "required": false },
+        "confidence": { "type": "number", "required": false },
+        "affectedFile": { "type": "string", "required": false },
+        "affectedLine": { "type": "number", "required": false },
+        "createdAt": { "type": "string", "required": true },
+        "updatedAt": { "type": "string", "required": true }
+      }
+    },
+    "Notification": {
+      "collection": "notifications/{uid}/items",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "userId": { "type": "string", "required": true },
+        "title": { "type": "string", "required": true },
+        "message": { "type": "string", "required": true },
+        "type": { "type": "string", "required": true },
+        "read": { "type": "boolean", "required": true },
+        "createdAt": { "type": "string", "required": true }
+      }
+    },
+    "ActivityLog": {
+      "collection": "activityLogs/{workspaceId}/events",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "workspaceId": { "type": "string", "required": true },
+        "actorId": { "type": "string", "required": true },
+        "actorName": { "type": "string", "required": true },
+        "action": { "type": "string", "required": true },
+        "target": { "type": "string", "required": true },
+        "timestamp": { "type": "string", "required": true }
+      }
+    }
+  }
+}

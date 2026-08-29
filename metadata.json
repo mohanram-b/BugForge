@@ -1,0 +1,6 @@
+{
+  "name": "BUGFORGE",
+  "description": "AI-powered Software Failure Investigation & Root-Cause Analysis platform. Understand the software around the error, trace failure paths, map blast radius, and verify fixes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
