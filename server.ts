@@ -369,6 +369,147 @@ app.get('/api/github/file', async (req, res) => {
   }
 });
 
+// Push / Save single file change directly to GitHub repository
+app.post('/api/github/push-file', async (req, res) => {
+  const { 
+    repo = 'mohanram-b/BugForge', 
+    branch = 'main', 
+    path: filePath, 
+    content, 
+    commitMessage, 
+    token 
+  } = req.body;
+
+  if (!filePath || content === undefined) {
+    return res.status(400).json({ 
+      error: 'MISSING_PARAMS', 
+      message: 'File path and content are required' 
+    });
+  }
+
+  try {
+    const cleanRepo = repo.replace('https://github.com/', '').replace(/\.git$/, '');
+    const [owner, repoName] = cleanRepo.split('/');
+    
+    if (!owner || !repoName) {
+      return res.status(400).json({ 
+        error: 'INVALID_REPO', 
+        message: 'Invalid repository name. Expected "owner/repo"' 
+      });
+    }
+
+    const headers: Record<string, string> = {
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'BUGFORGE-SourceViewer/2.0',
+      'Content-Type': 'application/json',
+    };
+
+    const authToken = token || process.env.GITHUB_TOKEN;
+    if (authToken) {
+      headers['Authorization'] = `token ${authToken}`;
+    }
+
+    // 1. Check if file already exists in repository to obtain its SHA
+    let existingSha: string | undefined = undefined;
+    try {
+      const checkRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repoName}/contents/${filePath}?ref=${encodeURIComponent(branch)}`,
+        { headers }
+      );
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        existingSha = checkData.sha;
+      }
+    } catch {
+      // ignore if new file
+    }
+
+    // 2. Encode content to Base64
+    const base64Content = Buffer.from(content, 'utf-8').toString('base64');
+    const msg = commitMessage || `Update ${filePath} via BUGFORGE Source Viewer`;
+
+    const putBody: any = {
+      message: msg,
+      content: base64Content,
+      branch: branch,
+    };
+    if (existingSha) {
+      putBody.sha = existingSha;
+    }
+
+    // 3. Commit and push directly to GitHub via Contents API
+    const pushRes = await fetch(
+      `https://api.github.com/repos/${owner}/${repoName}/contents/${filePath}`,
+      {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(putBody),
+      }
+    );
+
+    const pushData = await pushRes.json();
+
+    if (!pushRes.ok) {
+      const errMsg = pushData.message || 'GitHub rejected the commit request';
+      console.warn('[GitHub Push Warning]', pushData);
+
+      // Check if authentication / write permission error
+      if (pushRes.status === 401 || pushRes.status === 403 || pushRes.status === 404) {
+        return res.status(pushRes.status).json({
+          error: 'GITHUB_PERMISSION_DENIED',
+          message: `${errMsg}. Please ensure GITHUB_TOKEN has write (repo) permissions for ${owner}/${repoName}.`,
+          details: pushData
+        });
+      }
+
+      return res.status(pushRes.status).json({
+        error: 'PUSH_FAILED',
+        message: errMsg,
+        details: pushData
+      });
+    }
+
+    // 4. Record audit event
+    const currentUser = ((req as any).user as User) || {
+      id: 'usr_dev',
+      name: 'Mohan Ram',
+      role: 'DEVELOPER',
+    };
+
+    db.addAuditEvent({
+      id: `aud_push_${Date.now()}`,
+      entityType: 'INTEGRATION',
+      entityId: `${owner}/${repoName}:${filePath}`,
+      action: 'CODE_COMMITTED_GITHUB',
+      actorId: currentUser.id,
+      actorName: currentUser.name,
+      timestamp: new Date().toISOString(),
+      metadata: {
+        repo: `${owner}/${repoName}`,
+        branch,
+        filePath,
+        commitSha: pushData.commit?.sha,
+        commitUrl: pushData.commit?.html_url,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully pushed "${filePath}" to ${owner}/${repoName}@${branch}`,
+      commitSha: pushData.commit?.sha,
+      commitUrl: pushData.commit?.html_url,
+      path: filePath,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('[GitHub Push Error]', err);
+    res.status(500).json({ 
+      error: 'SERVER_PUSH_ERROR', 
+      message: err.message || 'Internal server error while pushing to GitHub' 
+    });
+  }
+});
+
 app.post('/api/auth/login', (req, res) => {
   const { email, password, mfaCode } = req.body;
   if (!email || !password) {

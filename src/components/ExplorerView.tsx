@@ -20,7 +20,11 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
-  Loader2
+  Loader2,
+  Save,
+  Edit3,
+  Check,
+  GitCommit
 } from 'lucide-react';
 import { Investigation, Severity, FileTreeNode } from '../types';
 import { buildFileTree } from '../utils/bugScanner';
@@ -72,6 +76,18 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
     return paths[0] || '';
   });
 
+  // Source Viewer Editing & GitHub Sync State
+  const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [editedCode, setEditedCode] = useState<string>('');
+  const [isPushing, setIsPushing] = useState<boolean>(false);
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'saving' | 'error'>('synced');
+  const [pushResult, setPushResult] = useState<{
+    success: boolean;
+    message: string;
+    commitSha?: string;
+    commitUrl?: string;
+  } | null>(null);
+
   const [activeLine, setActiveLine] = useState<number | undefined>(selectedFileLine);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['src', 'app', 'components']));
   const [fileFilter, setFileFilter] = useState<string>('');
@@ -79,6 +95,8 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const codeContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setActiveFiles(files);
@@ -89,11 +107,29 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
   }, [files]);
 
   useEffect(() => {
+    if (activeFile && activeFiles[activeFile] !== undefined) {
+      setEditedCode(activeFiles[activeFile]);
+    }
+  }, [activeFile, activeFiles]);
+
+  useEffect(() => {
     if (selectedFilePath && activeFiles[selectedFilePath]) {
       setActiveFile(selectedFilePath);
       setActiveLine(selectedFileLine);
     }
   }, [selectedFilePath, selectedFileLine, activeFiles]);
+
+  // Keyboard shortcut: Ctrl+S / Cmd+S to Save and Push directly to GitHub
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSaveAndPush();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeFile, editedCode, repoName, selectedBranch, activeFiles]);
 
   const filePaths = useMemo(() => Object.keys(activeFiles), [activeFiles]);
   const hasProject = filePaths.length > 0 || !!repoName;
@@ -121,6 +157,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
   const handleSelectFile = async (filePath: string) => {
     setActiveFile(filePath);
     setActiveLine(undefined);
+    setPushResult(null);
     if (onSelectFile) onSelectFile(filePath);
 
     // If file content is missing or placeholder and repo is connected, lazy-fetch from GitHub
@@ -131,6 +168,7 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         if (res.ok) {
           const data = await res.json();
           setActiveFiles((prev) => ({ ...prev, [filePath]: data.content }));
+          setEditedCode(data.content);
         }
       } catch (err) {
         console.error('Failed to lazy load file content', err);
@@ -138,6 +176,85 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         setLoadingFile(false);
       }
     }
+  };
+
+  // Save changes locally and automatically push to GitHub
+  const handleSaveAndPush = async (overrideContent?: string) => {
+    if (!activeFile) return;
+
+    const contentToPush = overrideContent !== undefined ? overrideContent : editedCode;
+
+    // 1. Update local files map
+    const updatedFiles = {
+      ...activeFiles,
+      [activeFile]: contentToPush,
+    };
+    setActiveFiles(updatedFiles);
+    if (onUploadProject) {
+      onUploadProject(updatedFiles, repoName || 'workspace');
+    }
+
+    // 2. Trigger automatic push request to the backend service
+    setIsPushing(true);
+    setSyncStatus('saving');
+    setPushResult(null);
+
+    const targetRepo = repoName || 'mohanram-b/BugForge';
+    const targetBranch = selectedBranch || 'main';
+
+    try {
+      const res = await fetch('/api/github/push-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repo: targetRepo,
+          branch: targetBranch,
+          path: activeFile,
+          content: contentToPush,
+          commitMessage: `Update ${activeFile} via BUGFORGE Source Viewer`,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setSyncStatus('error');
+        setPushResult({
+          success: false,
+          message: data.message || 'Push to remote repository failed.',
+        });
+      } else {
+        setSyncStatus('synced');
+        setPushResult({
+          success: true,
+          message: data.message || `Saved and pushed to ${targetRepo}@${targetBranch}`,
+          commitSha: data.commitSha,
+          commitUrl: data.commitUrl,
+        });
+      }
+    } catch (err: any) {
+      setSyncStatus('error');
+      setPushResult({
+        success: false,
+        message: err.message || 'Network error while attempting to push to GitHub.',
+      });
+    } finally {
+      setIsPushing(false);
+    }
+  };
+
+  // Handle Code Change with live Auto-Sync to GitHub
+  const handleCodeChange = (newCode: string) => {
+    setEditedCode(newCode);
+    setSyncStatus('saving');
+
+    // Debounce auto-push to GitHub (1.5s after user stops typing)
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(() => {
+      handleSaveAndPush(newCode);
+    }, 1500);
   };
 
   // GitHub Import
@@ -494,6 +611,45 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Small, Persistent Remote Sync Status Indicator */}
+          <div
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-all duration-200 ${
+              syncStatus === 'saving' || isPushing
+                ? 'bg-amber-950/40 border-amber-500/40 text-amber-300 animate-pulse'
+                : syncStatus === 'error'
+                ? 'bg-red-950/40 border-red-500/40 text-red-300'
+                : 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400'
+            }`}
+            title={
+              syncStatus === 'saving' || isPushing
+                ? 'Detected changes. Syncing and pushing to GitHub...'
+                : syncStatus === 'error'
+                ? 'Failed to push to GitHub'
+                : 'Remote repository is up-to-date'
+            }
+          >
+            {syncStatus === 'saving' || isPushing ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
+                <span className="font-sans font-medium">Syncing...</span>
+              </>
+            ) : syncStatus === 'error' ? (
+              <>
+                <AlertCircle className="w-3 h-3 text-red-400" />
+                <span className="font-sans font-medium">Sync Error</span>
+              </>
+            ) : (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <Check className="w-3 h-3 text-emerald-400" />
+                <span className="font-sans font-medium">Synced</span>
+              </>
+            )}
+          </div>
+
           <button
             onClick={() => setIsConnectModalOpen(true)}
             className="text-[11px] text-[#8B949E] hover:text-white flex items-center gap-1 px-2 py-1 rounded bg-[#121622] border border-[#1E2333] cursor-pointer"
@@ -549,61 +705,187 @@ export const ExplorerView: React.FC<ExplorerViewProps> = ({
         {/* ========================================================================= */}
         <div className="col-span-6 flex flex-col bg-[#090A0F] border-r border-[#1E2333] overflow-hidden">
           {/* Editor Header Bar */}
-          <div className="px-3 py-2 border-b border-[#1E2333] bg-[#0B0E14] flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2 font-mono truncate">
-              <span className="text-[#C9D1D9] text-[13px]">{activeFile || 'No file selected'}</span>
+          <div className="px-3 py-2 border-b border-[#1E2333] bg-[#0B0E14] flex items-center justify-between text-xs gap-2">
+            <div className="flex items-center gap-2 font-mono truncate min-w-0">
+              <span className="text-[#C9D1D9] text-[13px] font-medium truncate">{activeFile || 'No file selected'}</span>
               {loadingFile && <Loader2 className="w-3 h-3 animate-spin text-[#F97316]" />}
+              {activeFiles[activeFile] !== editedCode && (
+                <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px]">
+                  Unsaved
+                </span>
+              )}
             </div>
 
-            <div className="flex items-center gap-2 text-[11px] text-[#6E7681] font-mono">
-              <span>{lines.length} lines</span>
-              <span>•</span>
-              <span>UTF-8</span>
+            <div className="flex items-center gap-2 shrink-0 font-mono">
+              {/* Inline Source Viewer Sync Indicator */}
+              <div className="flex items-center gap-1 text-[11px]">
+                {syncStatus === 'saving' || isPushing ? (
+                  <span className="flex items-center gap-1 text-amber-400">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span className="text-[10px] font-sans">Syncing...</span>
+                  </span>
+                ) : syncStatus === 'error' ? (
+                  <span className="flex items-center gap-1 text-red-400">
+                    <AlertCircle className="w-3 h-3" />
+                    <span className="text-[10px] font-sans">Sync failed</span>
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-emerald-400">
+                    <Check className="w-3 h-3" />
+                    <span className="text-[10px] font-sans">Synced</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Edit / View Mode Toggle */}
+              <button
+                type="button"
+                onClick={() => setIsEditing(!isEditing)}
+                className={`px-2 py-1 rounded text-[11px] font-sans flex items-center gap-1 border transition-colors cursor-pointer ${
+                  isEditing
+                    ? 'bg-[#F97316]/20 border-[#F97316]/50 text-[#F97316]'
+                    : 'bg-[#161B26] border-[#1E2333] text-[#8B949E] hover:text-white'
+                }`}
+                title="Toggle Edit Mode"
+              >
+                {isEditing ? <Eye className="w-3 h-3" /> : <Edit3 className="w-3 h-3" />}
+                <span>{isEditing ? 'View Mode' : 'Edit Mode'}</span>
+              </button>
+
+              {/* Save & Push to GitHub Button */}
+              <button
+                type="button"
+                onClick={() => handleSaveAndPush()}
+                disabled={isPushing || !activeFile}
+                className="px-2.5 py-1 rounded bg-[#F97316] hover:bg-[#EA580C] text-black font-semibold text-[11px] font-sans flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shadow-xs"
+                title="Save locally and automatically push to GitHub (Ctrl+S / ⌘S)"
+              >
+                {isPushing ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Pushing...</span>
+                  </>
+                ) : (
+                  <>
+                    <GitCommit className="w-3 h-3" />
+                    <span>Save & Push</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
 
-          {/* Code Viewer Gutter & Lines */}
-          <div
-            ref={codeContainerRef}
-            className="flex-1 overflow-auto font-mono text-[13px] leading-[20px] bg-[#07090E] p-2"
-          >
-            {lines.map((line, idx) => {
-              const lineNum = idx + 1;
-              const isTargetLine = activeLine === lineNum;
-              const isRootCauseLine =
-                investigation?.recommendedFix?.line === lineNum &&
-                investigation?.recommendedFix?.file === activeFile;
-
-              return (
-                <div
-                  key={lineNum}
-                  id={`line-${lineNum}`}
-                  className={`flex items-start transition-colors ${
-                    isRootCauseLine
-                      ? 'bg-amber-500/10 border-l-2 border-amber-400'
-                      : isTargetLine
-                      ? 'bg-white/5 border-l-2 border-[#F97316]'
-                      : 'hover:bg-white/[0.02]'
-                  }`}
+          {/* GitHub Push Result Notification Banner */}
+          {pushResult && (
+            <div
+              className={`px-3 py-1.5 border-b text-[11px] flex items-center justify-between ${
+                pushResult.success
+                  ? 'bg-emerald-950/40 border-emerald-800/40 text-emerald-300'
+                  : 'bg-red-950/40 border-red-800/40 text-red-300'
+              }`}
+            >
+              <div className="flex items-center gap-1.5 truncate">
+                {pushResult.success ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                )}
+                <span className="truncate">{pushResult.message}</span>
+              </div>
+              {pushResult.commitUrl && (
+                <a
+                  href={pushResult.commitUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 underline text-emerald-400 hover:text-emerald-200 shrink-0 ml-2"
                 >
-                  {/* Line Number Gutter */}
-                  <span className="w-10 shrink-0 text-right pr-3 select-none text-[12px] text-[#484F58]">
-                    {lineNum}
-                  </span>
+                  <span>View Commit</span>
+                  <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              )}
+            </div>
+          )}
 
-                  {/* Root Cause Gutter Marker */}
-                  <span className="w-4 shrink-0 text-center select-none">
-                    {isRootCauseLine && <AlertTriangle className="w-3 h-3 text-amber-400 inline" />}
-                  </span>
+          {/* Code Viewer / Editor */}
+          {isEditing ? (
+            <div className="flex-1 flex overflow-hidden bg-[#07090E]">
+              {/* Line Gutter */}
+              <div className="w-12 select-none shrink-0 py-2 bg-[#0A0D14] border-r border-[#1E2333] text-right pr-2 text-[12px] text-[#484F58] font-mono overflow-hidden">
+                {editedCode.split('\n').map((_, idx) => (
+                  <div key={idx + 1} className="leading-[20px] h-[20px]">
+                    {idx + 1}
+                  </div>
+                ))}
+              </div>
+              {/* Editable Textarea */}
+              <textarea
+                ref={textareaRef}
+                value={editedCode}
+                onChange={(e) => handleCodeChange(e.target.value)}
+                onKeyDown={(e) => {
+                  // Support tab key indentation
+                  if (e.key === 'Tab') {
+                    e.preventDefault();
+                    const start = e.currentTarget.selectionStart;
+                    const end = e.currentTarget.selectionEnd;
+                    const value = e.currentTarget.value;
+                    const newValue = value.substring(0, start) + '  ' + value.substring(end);
+                    handleCodeChange(newValue);
+                    setTimeout(() => {
+                      if (textareaRef.current) {
+                        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = start + 2;
+                      }
+                    }, 0);
+                  }
+                }}
+                spellCheck={false}
+                placeholder="// Type or paste code here..."
+                className="flex-1 p-2 bg-transparent text-[#C9D1D9] font-mono text-[13px] leading-[20px] resize-none focus:outline-none overflow-auto whitespace-pre"
+              />
+            </div>
+          ) : (
+            <div
+              ref={codeContainerRef}
+              className="flex-1 overflow-auto font-mono text-[13px] leading-[20px] bg-[#07090E] p-2"
+            >
+              {(editedCode || activeContent).split('\n').map((line, idx) => {
+                const lineNum = idx + 1;
+                const isTargetLine = activeLine === lineNum;
+                const isRootCauseLine =
+                  investigation?.recommendedFix?.line === lineNum &&
+                  investigation?.recommendedFix?.file === activeFile;
 
-                  {/* Code Line */}
-                  <pre className="flex-1 text-[#C9D1D9] whitespace-pre font-mono text-[13px]">
-                    {line || ' '}
-                  </pre>
-                </div>
-              );
-            })}
-          </div>
+                return (
+                  <div
+                    key={lineNum}
+                    id={`line-${lineNum}`}
+                    className={`flex items-start transition-colors ${
+                      isRootCauseLine
+                        ? 'bg-amber-500/10 border-l-2 border-amber-400'
+                        : isTargetLine
+                        ? 'bg-white/5 border-l-2 border-[#F97316]'
+                        : 'hover:bg-white/[0.02]'
+                    }`}
+                  >
+                    {/* Line Number Gutter */}
+                    <span className="w-10 shrink-0 text-right pr-3 select-none text-[12px] text-[#484F58]">
+                      {lineNum}
+                    </span>
+
+                    {/* Root Cause Gutter Marker */}
+                    <span className="w-4 shrink-0 text-center select-none">
+                      {isRootCauseLine && <AlertTriangle className="w-3 h-3 text-amber-400 inline" />}
+                    </span>
+
+                    {/* Code Line */}
+                    <pre className="flex-1 text-[#C9D1D9] whitespace-pre font-mono text-[13px]">
+                      {line || ' '}
+                    </pre>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* ========================================================================= */}
