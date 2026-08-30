@@ -1,20 +1,19 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { 
-  Upload, 
   SearchCode, 
   FolderArchive, 
-  Github, 
   FileText, 
   Loader2, 
   CheckCircle2, 
   AlertCircle, 
-  Sparkles,
-  Smartphone,
-  Globe,
+  LayoutDashboard,
+  Play,
   FileCode,
-  ArrowRight
+  Smartphone,
+  Github,
+  FileArchive
 } from 'lucide-react';
-import { decompressZipFile } from '../utils/bugScanner';
+import { useActiveProject } from '../context/ActiveProjectContext';
 
 interface InvestigateViewProps {
   onStartInvestigation: (
@@ -23,143 +22,48 @@ interface InvestigateViewProps {
     pastedError?: string,
     gitRepoUrl?: string
   ) => Promise<void>;
+  onGoToDashboard?: () => void;
 }
 
 export const InvestigateView: React.FC<InvestigateViewProps> = ({
   onStartInvestigation,
+  onGoToDashboard,
 }) => {
-  const [projectSourceType, setProjectSourceType] = useState<'upload' | 'git'>('upload');
-  const [gitUrl, setGitUrl] = useState<string>('');
-  const [gitBranch, setGitBranch] = useState<string>('main');
+  const { activeProject, projectFiles } = useActiveProject();
   const [pastedError, setPastedError] = useState<string>('');
-  const [projectName, setProjectName] = useState<string>('');
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [decompressedFiles, setDecompressedFiles] = useState<Record<string, string>>({});
-  const [isDecompressing, setIsDecompressing] = useState<boolean>(false);
   const [isInvestigating, setIsInvestigating] = useState<boolean>(false);
   const [investigationStep, setInvestigationStep] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [dragActive, setDragActive] = useState<boolean>(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
-
-  const handleFiles = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-    setErrorMsg(null);
-    setIsDecompressing(true);
-
-    try {
-      const firstFile = fileList[0];
-      const lowerName = firstFile.name.toLowerCase();
-
-      if (
-        lowerName.endsWith('.zip') || 
-        lowerName.endsWith('.apk') || 
-        lowerName.endsWith('.jar') || 
-        lowerName.endsWith('.tar') || 
-        lowerName.endsWith('.gz') ||
-        lowerName.endsWith('.app')
-      ) {
-        setFileName(firstFile.name);
-        const name = firstFile.name.replace(/\.[^/.]+$/, '');
-        setProjectName(name);
-
-        const extracted = await decompressZipFile(firstFile);
-        if (Object.keys(extracted).length === 0) {
-          throw new Error('Could not extract readable source files from the archive.');
-        }
-        setDecompressedFiles(extracted);
-      } else {
-        const filesMap: Record<string, string> = {};
-        for (let i = 0; i < fileList.length; i++) {
-          const f = fileList[i];
-          const path = f.webkitRelativePath || f.name;
-          if (
-            !path.includes('node_modules/') && 
-            !path.includes('.git/') && 
-            !path.includes('dist/') && 
-            !path.includes('build/')
-          ) {
-            try {
-              const text = await f.text();
-              if (text && text.trim().length > 0) {
-                filesMap[path] = text;
-              }
-            } catch {
-              // skip binary
-            }
-          }
-        }
-
-        if (Object.keys(filesMap).length === 0) {
-          throw new Error('Could not extract readable code files from selection.');
-        }
-
-        setFileName(fileList.length === 1 ? fileList[0].name : `${fileList.length} files selected`);
-        setProjectName(fileList.length === 1 ? fileList[0].name : 'Uploaded Codebase');
-        setDecompressedFiles(filesMap);
-      }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to read files. Please upload a ZIP, APK, or code files.');
-    } finally {
-      setIsDecompressing(false);
-    }
-  };
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFiles(e.dataTransfer.files);
-    }
-  };
+  const fileCount = activeProject?.indexedFileCount || Object.keys(projectFiles).length || 0;
 
   const handleRunInvestigation = async () => {
-    if (projectSourceType === 'upload' && Object.keys(decompressedFiles).length === 0) {
-      setErrorMsg('Please upload a project archive (ZIP/APK) or source files first.');
-      return;
-    }
-    if (projectSourceType === 'git' && !gitUrl.trim()) {
-      setErrorMsg('Please enter a valid Git repository URL.');
+    if (!activeProject) {
+      setErrorMsg('No active project found. Please upload a project on the Dashboard.');
       return;
     }
 
     setErrorMsg(null);
     setIsInvestigating(true);
 
-    // Step-by-step loading animation
+    // Step-by-step loading progress
     for (let step = 1; step <= 6; step++) {
       setInvestigationStep(step);
-      await new Promise((res) => setTimeout(res, 280));
+      await new Promise((res) => setTimeout(res, 260));
     }
 
-    let filesToScan = decompressedFiles;
-    let projName = projectName;
-
-    if (projectSourceType === 'git') {
-      projName = gitUrl.split('/').pop()?.replace('.git', '') || 'Git Repository';
-      filesToScan = {
-        'src/server.js': `import express from "express";\nimport { initializeDatabase } from "./config/database.js";\nimport { loadEnvironment } from "./config/env.js";\n\ninitializeDatabase();\nloadEnvironment();\n\nconst app = express();\nexport default app;`,
-        'src/config/database.js': `import { MongoClient } from "mongodb";\nconst uri = process.env.DATABASE_URL;\nexport async function initializeDatabase() {\n  if (!uri) throw new Error("DATABASE_URL is not defined in process.env");\n  const client = new MongoClient(uri);\n  await client.connect();\n}`,
-        'src/config/env.js': `import dotenv from "dotenv";\nexport function loadEnvironment() {\n  dotenv.config();\n}`,
-        'package.json': `{\n  "name": "${projName}",\n  "type": "module"\n}`
-      };
+    try {
+      await onStartInvestigation(
+        projectFiles, 
+        activeProject.name, 
+        pastedError.trim() || undefined,
+        activeProject.repoUrl
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Investigation failed to complete.');
+    } finally {
+      setIsInvestigating(false);
     }
-
-    await onStartInvestigation(filesToScan, projName, pastedError, projectSourceType === 'git' ? gitUrl : undefined);
-    setIsInvestigating(false);
   };
 
   const loadExampleError = (type: 'db' | 'apk' | 'async') => {
@@ -172,223 +76,152 @@ export const InvestigateView: React.FC<InvestigateViewProps> = ({
     }
   };
 
+  // =========================================================================
+  // STATE A: NO ACTIVE PROJECT LOADED -> BLOCKED EMPTY STATE WITH GO TO DASHBOARD
+  // =========================================================================
+  if (!activeProject) {
+    return (
+      <div className="w-full max-w-4xl mx-auto py-12 font-sans select-none text-[#E2E8F0] flex flex-col items-center justify-center">
+        <div className="w-full bg-[#0D1017] border border-[#1E2333] rounded-xl p-12 flex flex-col items-center justify-center text-center space-y-4 shadow-xl">
+          <div className="w-12 h-12 rounded-xl border border-[#1E2333] bg-[#121622] flex items-center justify-center text-[#8B949E]">
+            <SearchCode className="w-6 h-6 text-[#F97316]" />
+          </div>
+
+          <div className="space-y-1 max-w-sm">
+            <h2 className="text-base font-semibold text-white">No Project Loaded</h2>
+            <p className="text-xs text-[#8B949E] leading-relaxed">
+              Upload a project or connect a repository from the Dashboard before running forensic investigations.
+            </p>
+          </div>
+
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={onGoToDashboard}
+              className="btn-motion px-4 py-2 rounded-lg bg-[#F97316] hover:bg-[#EA580C] text-black font-semibold text-xs transition-colors cursor-pointer flex items-center gap-2 shadow-xs"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span>Go to Dashboard</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // STATE B: ACTIVE PROJECT LOADED -> TARGETED INVESTIGATION WORKSPACE
+  // =========================================================================
   return (
-    <div className="max-w-4xl mx-auto space-y-8 py-4">
+    <div className="max-w-4xl mx-auto space-y-6 py-4 font-sans text-[#E2E8F0] select-none">
       {/* Top Header */}
-      <div className="text-center space-y-2 pb-2">
-        <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight font-sans">
+      <div className="text-center space-y-1.5 pb-2">
+        <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
           Investigate a Failure
         </h1>
-        <p className="text-sm text-slate-400 max-w-lg mx-auto">
-          Find out what broke, why, and how to fix it. Upload your project or connect a repository with the failure trace.
+        <p className="text-xs sm:text-sm text-[#8B949E] max-w-lg mx-auto">
+          Diagnose failure paths, isolate root causes, and synthesize verified code patches for your active project.
         </p>
       </div>
 
-      {/* Main Form Container */}
-      <div className="p-6 sm:p-8 rounded-2xl bg-[#0E131F] border border-white/10 shadow-xl space-y-6">
-        {/* Input 1: Project Source */}
+      {/* Main Investigation Panel */}
+      <div className="p-6 sm:p-8 rounded-2xl bg-[#0D1017] border border-[#1E2333] shadow-xl space-y-6">
+        
+        {/* Step 1: Active Codebase Target (Locked to activeProject) */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <label className="text-sm font-bold text-white flex items-center gap-2">
+            <label className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
               <FolderArchive className="w-4 h-4 text-[#F97316]" />
-              <span>1. Project Codebase</span>
+              <span>1. Target Project</span>
             </label>
 
-            {/* Toggle Upload vs Git */}
-            <div className="flex items-center rounded-lg bg-[#141C2B] p-0.5 border border-white/10 text-xs">
-              <button
-                type="button"
-                onClick={() => setProjectSourceType('upload')}
-                className={`px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                  projectSourceType === 'upload'
-                    ? 'bg-[#F97316] text-black font-bold'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                Upload ZIP / APK / Files
-              </button>
-              <button
-                type="button"
-                onClick={() => setProjectSourceType('git')}
-                className={`px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                  projectSourceType === 'git'
-                    ? 'bg-[#F97316] text-black font-bold'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                Git Repository
-              </button>
-            </div>
+            <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+              <span>Active Workspace</span>
+            </span>
           </div>
 
-          {projectSourceType === 'upload' ? (
-            <div
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              className={`relative border-2 border-dashed rounded-xl p-6 sm:p-8 text-center transition-all ${
-                dragActive
-                  ? 'border-[#F97316] bg-[#F97316]/10'
-                  : fileName
-                  ? 'border-emerald-500/50 bg-emerald-500/5'
-                  : 'border-white/15 bg-white/[0.02] hover:border-white/30'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".zip,.apk,.jar,.tar,.gz,.js,.ts,.jsx,.tsx,.json,.py,.go,.rs,.java,.xml,.html,.css"
-                onChange={(e) => handleFiles(e.target.files)}
-                className="hidden"
-              />
-              <input
-                ref={folderInputRef}
-                type="file"
-                // @ts-ignore
-                webkitdirectory="true"
-                // @ts-ignore
-                directory="true"
-                multiple
-                onChange={(e) => handleFiles(e.target.files)}
-                className="hidden"
-              />
-
-              {isDecompressing ? (
-                <div className="py-4 flex flex-col items-center space-y-3">
-                  <Loader2 className="w-8 h-8 text-[#F97316] animate-spin" />
-                  <span className="text-xs font-mono text-slate-300">
-                    Decompressing and parsing package files...
-                  </span>
-                </div>
-              ) : fileName ? (
-                <div className="py-2 flex flex-col sm:flex-row items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 text-left">
-                    <div className="w-10 h-10 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-mono text-sm border border-emerald-500/30 shrink-0">
-                      <CheckCircle2 className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <span className="text-sm font-bold text-white">{fileName}</span>
-                      <p className="text-xs text-slate-400 font-mono mt-0.5">
-                        {Object.keys(decompressedFiles).length} files extracted ready for analysis
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-slate-300 text-xs font-mono transition-colors cursor-pointer"
-                    >
-                      Change File
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="w-12 h-12 rounded-full bg-white/5 border border-white/10 mx-auto flex items-center justify-center text-slate-400">
-                    <Upload className="w-6 h-6 text-slate-300" />
-                  </div>
-                  <div>
-                    <span className="text-sm font-semibold text-white">
-                      Drop your ZIP, APK, or source code files here
-                    </span>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Supports ZIP, Android APKs, Web source trees, Node.js, Python, Java, etc.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white text-xs font-mono font-medium transition-colors cursor-pointer"
-                    >
-                      Choose Archive or Files
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => folderInputRef.current?.click()}
-                      className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-mono transition-colors cursor-pointer"
-                    >
-                      Upload Entire Folder
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="p-4 rounded-xl bg-white/[0.02] border border-white/10 space-y-3">
-              <div className="flex flex-col sm:flex-row gap-3">
-                <div className="flex-1 relative">
-                  <Github className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    placeholder="https://github.com/owner/repository.git"
-                    value={gitUrl}
-                    onChange={(e) => setGitUrl(e.target.value)}
-                    className="w-full bg-[#141C2B] border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#F97316] font-mono"
-                  />
-                </div>
-                <div className="sm:w-32">
-                  <input
-                    type="text"
-                    placeholder="Branch (main)"
-                    value={gitBranch}
-                    onChange={(e) => setGitBranch(e.target.value)}
-                    className="w-full bg-[#141C2B] border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#F97316] font-mono"
-                  />
-                </div>
+          {/* Active Project Banner */}
+          <div className="p-4 rounded-xl bg-[#121622] border border-[#1E2333] flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="w-10 h-10 rounded-lg bg-[#181E2E] border border-[#262F44] flex items-center justify-center text-[#F97316] shrink-0">
+                {activeProject.projectType === 'android_apk' || activeProject.projectType === 'android_aab' ? (
+                  <Smartphone className="w-5 h-5" />
+                ) : activeProject.projectType === 'zip_archive' ? (
+                  <FileArchive className="w-5 h-5" />
+                ) : activeProject.projectType === 'github_repo' ? (
+                  <Github className="w-5 h-5" />
+                ) : (
+                  <FileCode className="w-5 h-5" />
+                )}
               </div>
-              <p className="text-xs text-slate-500">
-                BugForge will pull the AST and dependencies to trace failure paths across commits.
-              </p>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-white font-mono truncate">
+                  {activeProject.name}
+                </h3>
+                <p className="text-xs text-[#8B949E] mt-0.5">
+                  {activeProject.fileType || 'Source Project'} • {fileCount} indexed files
+                </p>
+              </div>
             </div>
-          )}
+
+            <div className="text-right shrink-0">
+              <span className="text-xs font-mono text-[#C9D1D9] bg-[#161B26] px-2.5 py-1 rounded border border-[#222838]">
+                {activeProject.fileSize || 'Attached'}
+              </span>
+            </div>
+          </div>
         </div>
 
-        {/* Input 2: Failure Description / Error Trace */}
+        {/* Step 2: Optional Failure Description / Error Trace */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <label className="text-sm font-bold text-white flex items-center gap-2">
+            <label className="text-xs font-bold text-white flex items-center gap-2 uppercase tracking-wider">
               <FileText className="w-4 h-4 text-[#F97316]" />
-              <span>2. Failure, Error, or Log Trace</span>
-              <span className="text-xs font-normal text-slate-400">(Optional)</span>
+              <span>2. Failure Log / Stack Trace</span>
+              <span className="text-xs font-normal text-[#8B949E] normal-case">(Optional)</span>
             </label>
 
             <div className="flex items-center gap-2 text-xs font-mono">
-              <span className="text-slate-500 hidden sm:inline">Examples:</span>
+              <span className="text-[#6E7681] hidden sm:inline">Examples:</span>
               <button
                 type="button"
                 onClick={() => loadExampleError('db')}
-                className="text-slate-400 hover:text-amber-400 underline transition-colors cursor-pointer"
+                className="text-[#8B949E] hover:text-[#F97316] underline transition-colors cursor-pointer"
               >
-                Database error
+                Database
               </button>
-              <span className="text-slate-600">•</span>
+              <span className="text-[#2B3245]">•</span>
               <button
                 type="button"
                 onClick={() => loadExampleError('apk')}
-                className="text-slate-400 hover:text-amber-400 underline transition-colors cursor-pointer"
+                className="text-[#8B949E] hover:text-[#F97316] underline transition-colors cursor-pointer"
               >
-                Android APK
+                Android
+              </button>
+              <span className="text-[#2B3245]">•</span>
+              <button
+                type="button"
+                onClick={() => loadExampleError('async')}
+                className="text-[#8B949E] hover:text-[#F97316] underline transition-colors cursor-pointer"
+              >
+                Async
               </button>
             </div>
           </div>
 
           <textarea
-            rows={4}
-            placeholder="Paste your stack trace, terminal crash output, or error log here (or leave blank for automated codebase scan)..."
+            rows={5}
+            placeholder="Paste your stack trace, crash output, or error log here (or leave blank for an automated project-wide AST scan)..."
             value={pastedError}
             onChange={(e) => setPastedError(e.target.value)}
-            className="w-full bg-[#141C2B] border border-white/10 rounded-xl p-3.5 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-[#F97316] leading-relaxed resize-y"
+            className="w-full bg-[#090A0F] border border-[#1E2333] rounded-xl p-3.5 text-xs font-mono text-slate-200 placeholder-[#6E7681] focus:outline-none focus:border-[#F97316] leading-relaxed resize-y"
           />
         </div>
 
-        {/* Error message if any */}
+        {/* Error message alert if any */}
         {errorMsg && (
-          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-red-300 flex items-center gap-2">
+          <div className="p-3 rounded-lg bg-red-950/40 border border-red-800/40 text-xs text-red-300 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
             <span>{errorMsg}</span>
           </div>
@@ -396,47 +229,47 @@ export const InvestigateView: React.FC<InvestigateViewProps> = ({
 
         {/* Real-Time Loading Experience During Investigation */}
         {isInvestigating ? (
-          <div className="p-6 rounded-xl bg-[#090D14] border border-amber-500/30 space-y-4">
+          <div className="p-6 rounded-xl bg-[#090A0F] border border-orange-500/30 space-y-4">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-bold text-white flex items-center gap-2 font-mono">
-                <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-                Analyzing project...
+              <span className="text-xs font-bold text-white flex items-center gap-2 font-mono">
+                <Loader2 className="w-4 h-4 text-[#F97316] animate-spin" />
+                Analyzing {activeProject.name}...
               </span>
-              <span className="text-xs font-mono text-amber-400">
-                LatentCode Engine Active
+              <span className="text-[11px] font-mono text-[#F97316]">
+                Forensic AST Engine Active
               </span>
             </div>
 
             {/* Step list */}
             <div className="space-y-2 text-xs font-mono">
-              <div className={`flex items-center gap-2 ${investigationStep >= 1 ? 'text-emerald-400' : 'text-slate-500'}`}>
+              <div className={`flex items-center gap-2 ${investigationStep >= 1 ? 'text-emerald-400' : 'text-[#6E7681]'}`}>
                 {investigationStep >= 1 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <span className="w-3.5 h-3.5 rounded-full border border-slate-600 inline-block" />}
                 <span>Reading project files & AST hierarchy</span>
               </div>
-              <div className={`flex items-center gap-2 ${investigationStep >= 2 ? 'text-emerald-400' : 'text-slate-500'}`}>
+              <div className={`flex items-center gap-2 ${investigationStep >= 2 ? 'text-emerald-400' : 'text-[#6E7681]'}`}>
                 {investigationStep >= 2 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <span className="w-3.5 h-3.5 rounded-full border border-slate-600 inline-block" />}
                 <span>Finding relevant modules and config</span>
               </div>
-              <div className={`flex items-center gap-2 ${investigationStep >= 3 ? 'text-emerald-400' : 'text-slate-500'}`}>
+              <div className={`flex items-center gap-2 ${investigationStep >= 3 ? 'text-emerald-400' : 'text-[#6E7681]'}`}>
                 {investigationStep >= 3 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <span className="w-3.5 h-3.5 rounded-full border border-slate-600 inline-block" />}
                 <span>Tracing failure call graph and execution path</span>
               </div>
-              <div className={`flex items-center gap-2 ${investigationStep >= 4 ? 'text-emerald-400' : investigationStep === 3 ? 'text-amber-400' : 'text-slate-500'}`}>
+              <div className={`flex items-center gap-2 ${investigationStep >= 4 ? 'text-emerald-400' : investigationStep === 3 ? 'text-amber-400' : 'text-[#6E7681]'}`}>
                 {investigationStep >= 4 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <span className="w-3.5 h-3.5 rounded-full border border-amber-400 inline-block" />}
                 <span>Finding root cause hypothesis</span>
               </div>
-              <div className={`flex items-center gap-2 ${investigationStep >= 5 ? 'text-emerald-400' : 'text-slate-500'}`}>
+              <div className={`flex items-center gap-2 ${investigationStep >= 5 ? 'text-emerald-400' : 'text-[#6E7681]'}`}>
                 {investigationStep >= 5 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <span className="w-3.5 h-3.5 rounded-full border border-slate-600 inline-block" />}
                 <span>Calculating blast radius and impact</span>
               </div>
-              <div className={`flex items-center gap-2 ${investigationStep >= 6 ? 'text-emerald-400' : 'text-slate-500'}`}>
+              <div className={`flex items-center gap-2 ${investigationStep >= 6 ? 'text-emerald-400' : 'text-[#6E7681]'}`}>
                 {investigationStep >= 6 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <span className="w-3.5 h-3.5 rounded-full border border-slate-600 inline-block" />}
                 <span>Preparing verified code patch & sandbox test cases</span>
               </div>
             </div>
 
             {/* Targeted Status Line */}
-            <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-[11px] font-mono text-slate-400">
+            <div className="pt-2 border-t border-[#1E2333] flex items-center justify-between text-[11px] font-mono text-[#8B949E]">
               <span className="text-emerald-400">Codebase context ✓</span>
               <span className="text-emerald-400">Failure path ✓</span>
               <span className="text-emerald-400">Root cause ✓</span>
@@ -447,10 +280,10 @@ export const InvestigateView: React.FC<InvestigateViewProps> = ({
             <button
               type="button"
               onClick={handleRunInvestigation}
-              className="w-full sm:w-auto bg-[#F97316] hover:bg-[#FB923C] text-black font-bold text-sm px-8 py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer"
+              className="btn-motion w-full sm:w-auto bg-[#F97316] hover:bg-[#EA580C] text-black font-bold text-xs px-8 py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 cursor-pointer"
             >
-              <SearchCode className="w-4 h-4 stroke-[2.5]" />
-              <span>Investigate</span>
+              <Play className="w-3.5 h-3.5 fill-black" />
+              <span>Start Investigation</span>
             </button>
           </div>
         )}

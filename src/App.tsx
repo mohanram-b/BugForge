@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Navbar, NavTab } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
 import { IssuesView } from './components/IssuesView';
-import { InvestigateView } from './components/InvestigateView';
-import { InvestigationScreen } from './components/InvestigationScreen';
 import { ExplorerView } from './components/ExplorerView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
@@ -11,8 +10,11 @@ import { LoginScreen } from './components/LoginScreen';
 import { NewInvestigationModal } from './components/NewInvestigationModal';
 import { InvestigationReportModal } from './components/InvestigationReportModal';
 import { GlobalSearchModal } from './components/GlobalSearchModal';
-import { Investigation, Issue, User } from './types';
+import { AuthActionModal } from './components/AuthActionModal';
+import { VectorMatrixBackground } from './components/VectorMatrixBackground';
+import { Investigation, User } from './types';
 import { scanCodebaseForBugs } from './utils/bugScanner';
+import { ActiveProjectProvider, useActiveProject } from './context/ActiveProjectContext';
 import { 
   auth, 
   onAuthStateChanged, 
@@ -25,12 +27,18 @@ const STORAGE_KEY = 'bugforge_investigations_data';
 const USER_KEY = 'bugforge_current_user';
 const TOKEN_KEY = 'bf_auth_token';
 
-export default function App() {
+function AppContent() {
   const [currentView, setCurrentView] = useState<NavTab>('dashboard');
   const [explorerFile, setExplorerFile] = useState<string | undefined>(undefined);
   const [explorerLine, setExplorerLine] = useState<number | undefined>(undefined);
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
+
+  const { 
+    activeProject, 
+    projectFiles, 
+    uploadAndSetActiveProject 
+  } = useActiveProject();
 
   // Authentication State
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -42,10 +50,6 @@ export default function App() {
     }
     return null;
   });
-
-  // Loaded project files for Explorer and Active Investigation
-  const [projectFiles, setProjectFiles] = useState<Record<string, string>>({});
-  const [connectedRepo, setConnectedRepo] = useState<string>('');
 
   // Load user's real investigations
   const [investigations, setInvestigations] = useState<Investigation[]>(() => {
@@ -78,7 +82,6 @@ export default function App() {
 
   // Handle Firebase Auth Session & Redirects
   useEffect(() => {
-    // Check redirect result first
     getRedirectResult(auth)
       .then(async (result) => {
         if (result?.user) {
@@ -103,7 +106,6 @@ export default function App() {
         console.warn('Redirect sign-in notice:', err);
       });
 
-    // Subscribe to auth state listener
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
@@ -126,7 +128,6 @@ export default function App() {
           console.error('Error syncing user profile:', err);
         }
       } else {
-        // If not authenticated with Firebase, clear session
         setCurrentUser(null);
         localStorage.removeItem(USER_KEY);
         localStorage.removeItem(TOKEN_KEY);
@@ -182,11 +183,25 @@ export default function App() {
     pastedError?: string,
     gitRepoUrl?: string
   ) => {
-    setProjectFiles(files);
-    if (gitRepoUrl) setConnectedRepo(gitRepoUrl);
+    // If not already active project, persist as single active project
+    if (!activeProject || activeProject.name !== projectName) {
+      try {
+        await uploadAndSetActiveProject(
+          files,
+          projectName,
+          gitRepoUrl ? 'GitHub Repository' : 'Source Project',
+          'Active Workspace',
+          0,
+          gitRepoUrl ? 'github_repo' : 'source_project',
+          gitRepoUrl,
+          'main'
+        );
+      } catch (err) {
+        console.warn('Could not persist active project:', err);
+      }
+    }
 
     try {
-      // Run static and causal bug scanning engine
       const scannedResult = await scanCodebaseForBugs(files, projectName, pastedError);
 
       const newInv: Investigation = {
@@ -200,7 +215,7 @@ export default function App() {
 
       setInvestigations((prev) => [newInv, ...prev]);
       setActiveInvestigation(newInv);
-      setCurrentView('investigation');
+      setCurrentView('issues');
     } catch (err) {
       console.error('Failed to run forensic scan', err);
     }
@@ -208,7 +223,7 @@ export default function App() {
 
   const handleOpenInvestigation = (inv: Investigation) => {
     setActiveInvestigation(inv);
-    setCurrentView('investigation');
+    setCurrentView('issues');
   };
 
   const handleOpenInExplorer = (file: string, line?: number) => {
@@ -258,7 +273,6 @@ export default function App() {
     }
   };
 
-  // If initial auth state is loading and no saved user
   if (authLoading && !currentUser) {
     return (
       <div className="min-h-screen bg-[#090A0F] text-[#E2E8F0] flex items-center justify-center font-sans">
@@ -270,19 +284,21 @@ export default function App() {
     );
   }
 
-  // If user is not authenticated, present the Login Screen
   if (!currentUser) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
   return (
-    <div className="min-h-screen bg-[#090A0F] text-[#E2E8F0] flex flex-col font-sans selection:bg-[#F97316]/30 selection:text-white">
+    <div className="relative min-h-screen bg-[#090A0F] text-[#E2E8F0] flex flex-col font-sans selection:bg-[#F97316]/30 selection:text-white">
+      {/* Subtle Vector Matrix Background (Persistent across navigation) */}
+      <VectorMatrixBackground />
+
       {/* Navigation Bar */}
       <Navbar
         currentView={currentView}
         setCurrentView={setCurrentView}
         activeInvestigation={activeInvestigation}
-        onNewInvestigation={() => setCurrentView('investigate')}
+        onNewInvestigation={() => setCurrentView('issues')}
         onOpenSearch={() => setIsSearchOpen(true)}
         currentUser={currentUser}
         onSelectIssueById={(id) => {
@@ -292,111 +308,94 @@ export default function App() {
         onSignOut={handleSignOut}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 w-full px-4 sm:px-6 py-4 flex flex-col overflow-y-auto">
-        {currentView === 'dashboard' && (
-          <DashboardView
-            investigations={investigations}
-            onOpenInvestigation={handleOpenInvestigation}
-            onNewInvestigation={() => setCurrentView('investigate')}
-            onOpenExplorer={handleOpenInExplorer}
-            onNavigateToIssues={() => setCurrentView('issues')}
-            onSelectIssue={(issue) => {
-              setSelectedIssueId(issue.id);
-              setCurrentView('issues');
-            }}
-            onUploadAndScanFiles={(files, name, error, repo) =>
-              handleUploadAndScanFiles(files, name, error, repo)
-            }
-            onConnectGitHub={() => {
-              setCurrentView('explorer');
-            }}
-          />
-        )}
+      {/* Main Content Area with Seamless Page Transition */}
+      <main className="relative z-10 flex-1 w-full px-4 sm:px-6 py-4 flex flex-col overflow-y-auto overflow-x-hidden">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={currentView}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className="flex-1 flex flex-col w-full"
+          >
+            {currentView === 'dashboard' && (
+              <DashboardView
+                investigations={investigations}
+                onOpenInvestigation={handleOpenInvestigation}
+                onNewInvestigation={() => setCurrentView('issues')}
+                onOpenExplorer={() => setCurrentView('explorer')}
+                onNavigateToIssues={() => setCurrentView('issues')}
+                onSelectIssue={(issue) => {
+                  setSelectedIssueId(issue.id);
+                  setCurrentView('issues');
+                }}
+                onUploadAndScanFiles={(files, name, error, repo) =>
+                  handleUploadAndScanFiles(files, name, error, repo)
+                }
+                onConnectGitHub={() => {
+                  setCurrentView('dashboard');
+                }}
+              />
+            )}
 
-        {currentView === 'issues' && (
-          <IssuesView
-            currentUser={currentUser}
-            initialSelectedIssueId={selectedIssueId}
-            onOpenInExplorer={handleOpenInExplorer}
-          />
-        )}
+            {currentView === 'issues' && (
+              <IssuesView
+                currentUser={currentUser}
+                initialSelectedIssueId={selectedIssueId}
+                onOpenInExplorer={handleOpenInExplorer}
+                onGoToDashboard={() => setCurrentView('dashboard')}
+                activeInvestigation={activeInvestigation}
+                investigations={investigations}
+                onSelectInvestigation={(inv) => {
+                  setActiveInvestigation(inv);
+                }}
+                onVerifyFix={handleVerifyFix}
+                isVerifying={isVerifying}
+                onExportReport={() => setIsReportModalOpen(true)}
+                onUploadAndScanFiles={handleUploadAndScanFiles}
+              />
+            )}
 
-        {currentView === 'investigate' && (
-          <InvestigateView
-            onStartInvestigation={async (files, projectName, pastedError, gitRepoUrl) => {
-              await handleUploadAndScanFiles(files, projectName, pastedError, gitRepoUrl);
-            }}
-          />
-        )}
+            {currentView === 'explorer' && (
+              <ExplorerView
+                files={projectFiles}
+                investigation={activeInvestigation}
+                selectedFilePath={explorerFile}
+                selectedFileLine={explorerLine}
+                onSelectFile={(path, line) => {
+                  setExplorerFile(path);
+                  setExplorerLine(line);
+                }}
+                onOpenInvestigation={() => {
+                  setCurrentView('issues');
+                }}
+                onNewInvestigation={() => setCurrentView('issues')}
+                onGoToDashboard={() => setCurrentView('dashboard')}
+              />
+            )}
 
-        {currentView === 'explorer' && (
-          <ExplorerView
-            files={projectFiles}
-            investigation={activeInvestigation}
-            selectedFilePath={explorerFile}
-            selectedFileLine={explorerLine}
-            onSelectFile={(path, line) => {
-              setExplorerFile(path);
-              setExplorerLine(line);
-            }}
-            onOpenInvestigation={() => {
-              if (activeInvestigation) setCurrentView('investigation');
-            }}
-            onNewInvestigation={() => setCurrentView('investigate')}
-            onUploadProject={(files, name) => {
-              setProjectFiles(files);
-              setConnectedRepo(name);
-            }}
-            connectedRepo={connectedRepo}
-          />
-        )}
+            {currentView === 'history' && (
+              <HistoryView
+                investigations={investigations}
+                onOpenInvestigation={handleOpenInvestigation}
+                onNewInvestigation={() => setCurrentView('issues')}
+                onClearHistory={() => {
+                  setInvestigations([]);
+                  setActiveInvestigation(null);
+                  localStorage.removeItem(STORAGE_KEY);
+                }}
+              />
+            )}
 
-        {currentView === 'history' && (
-          <HistoryView
-            investigations={investigations}
-            onOpenInvestigation={handleOpenInvestigation}
-            onNewInvestigation={() => setCurrentView('investigate')}
-            onClearHistory={() => {
-              setInvestigations([]);
-              setActiveInvestigation(null);
-              localStorage.removeItem(STORAGE_KEY);
-            }}
-          />
-        )}
-
-        {currentView === 'settings' && (
-          <SettingsView
-            currentUser={currentUser}
-            onUpdateCurrentUser={setCurrentUser}
-          />
-        )}
-
-        {currentView === 'investigation' && activeInvestigation && (
-          <InvestigationScreen
-            investigation={activeInvestigation}
-            onBack={() => setCurrentView('dashboard')}
-            onVerifyFix={handleVerifyFix}
-            isVerifying={isVerifying}
-            onExportReport={() => setIsReportModalOpen(true)}
-            onOpenInExplorer={handleOpenInExplorer}
-          />
-        )}
-
-        {currentView === 'investigation' && !activeInvestigation && (
-          <div className="max-w-md mx-auto text-center py-16 space-y-4">
-            <h2 className="text-sm font-semibold text-white">No Active Investigation</h2>
-            <p className="text-xs text-[#8B949E]">
-              Select an investigation from your history or start a new diagnosis.
-            </p>
-            <button
-              onClick={() => setCurrentView('investigate')}
-              className="px-3.5 py-1.5 bg-[#F97316] hover:bg-[#EA580C] text-black font-semibold text-xs rounded cursor-pointer transition-colors"
-            >
-              Start Investigation
-            </button>
-          </div>
-        )}
+            {currentView === 'settings' && (
+              <SettingsView
+                currentUser={currentUser}
+                onUpdateCurrentUser={setCurrentUser}
+              />
+            )}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
       {/* Upload/New Investigation Modal */}
@@ -423,6 +422,17 @@ export default function App() {
         investigations={investigations}
         onSelectInvestigation={handleOpenInvestigation}
       />
+
+      {/* Firebase Auth Email Action & Password Reset Modal */}
+      <AuthActionModal />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ActiveProjectProvider>
+      <AppContent />
+    </ActiveProjectProvider>
   );
 }

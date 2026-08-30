@@ -13,7 +13,8 @@ import {
   Severity,
   Priority,
   IssueStatus,
-  Investigation
+  Investigation,
+  ActiveProject
 } from '../src/types';
 
 const DB_FILE = path.join(process.cwd(), 'server', 'database.json');
@@ -28,7 +29,7 @@ export function generateToken(): string {
 }
 
 // Initial seed users
-const DEFAULT_SALT = 'bugforge_secure_salt_2026';
+const DEFAULT_SALT = process.env.SESSION_SECRET || process.env.SECURITY_SALT || 'bugforge_secure_salt_2026';
 const INITIAL_USERS: User[] = [
   {
     id: 'usr_default',
@@ -76,7 +77,7 @@ const INITIAL_INTEGRATIONS: IntegrationSettings = {
   },
   cicd: {
     enabled: true,
-    webhookSecret: 'bf_secret_ci_webhook_token_2026',
+    webhookSecret: process.env.CICD_WEBHOOK_SECRET || 'bf_secret_ci_webhook_token_2026',
     autoInvestigate: true,
   },
 };
@@ -90,6 +91,9 @@ export interface DatabaseSchema {
   notifications: Notification[];
   integrations: IntegrationSettings;
   sessions: Record<string, { userId: string; expiresAt: number }>;
+  projects: ActiveProject[];
+  projectFiles: Record<string, Record<string, string>>;
+  userActiveProjects: Record<string, string>;
 }
 
 class Database {
@@ -103,7 +107,20 @@ class Database {
     try {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        return {
+          users: parsed.users || INITIAL_USERS,
+          issues: parsed.issues || INITIAL_ISSUES,
+          comments: parsed.comments || INITIAL_COMMENTS,
+          attachments: parsed.attachments || [],
+          auditEvents: parsed.auditEvents || INITIAL_AUDIT,
+          notifications: parsed.notifications || INITIAL_NOTIFICATIONS,
+          integrations: parsed.integrations || INITIAL_INTEGRATIONS,
+          sessions: parsed.sessions || {},
+          projects: parsed.projects || [],
+          projectFiles: parsed.projectFiles || {},
+          userActiveProjects: parsed.userActiveProjects || {},
+        };
       }
     } catch (e) {
       console.error('[Database] Failed to read database file, initializing defaults', e);
@@ -117,6 +134,9 @@ class Database {
       notifications: INITIAL_NOTIFICATIONS,
       integrations: INITIAL_INTEGRATIONS,
       sessions: {},
+      projects: [],
+      projectFiles: {},
+      userActiveProjects: {},
     };
   }
 
@@ -301,6 +321,115 @@ class Database {
     this.data.integrations = { ...this.data.integrations, ...settings };
     this.save();
     return this.data.integrations;
+  }
+
+  // Active Projects (Single Active Project Architecture)
+  public getActiveProject(userId?: string): ActiveProject | undefined {
+    if (userId && this.data.userActiveProjects[userId]) {
+      const projId = this.data.userActiveProjects[userId];
+      const found = this.data.projects.find((p) => p.id === projId);
+      if (found) return found;
+    }
+    // Fallback to active project if single workspace
+    return this.data.projects.find((p) => p.active);
+  }
+
+  public getProjectById(id: string): ActiveProject | undefined {
+    return this.data.projects.find((p) => p.id === id);
+  }
+
+  public setActiveProject(
+    userId: string,
+    projectData: Omit<ActiveProject, 'active'>,
+    files?: Record<string, string>
+  ): ActiveProject {
+    // Deactivate previous active project for this user/workspace
+    this.data.projects.forEach((p) => {
+      if (p.userId === userId || !p.userId) {
+        p.active = false;
+      }
+    });
+
+    const existingIndex = this.data.projects.findIndex((p) => p.id === projectData.id);
+    const activeProj: ActiveProject = {
+      ...projectData,
+      userId: userId || projectData.userId || 'usr_default',
+      active: true,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (existingIndex >= 0) {
+      this.data.projects[existingIndex] = activeProj;
+    } else {
+      this.data.projects.unshift(activeProj);
+    }
+
+    if (userId) {
+      this.data.userActiveProjects[userId] = activeProj.id;
+    }
+
+    if (files) {
+      this.data.projectFiles[activeProj.id] = files;
+    }
+
+    this.save();
+    return activeProj;
+  }
+
+  public getProjectFiles(projectId: string): Record<string, string> {
+    return this.data.projectFiles[projectId] || {};
+  }
+
+  public updateProjectFile(projectId: string, filePath: string, content: string): boolean {
+    if (!this.data.projectFiles[projectId]) {
+      this.data.projectFiles[projectId] = {};
+    }
+    this.data.projectFiles[projectId][filePath] = content;
+    const proj = this.data.projects.find((p) => p.id === projectId);
+    if (proj) {
+      proj.indexedFileCount = Object.keys(this.data.projectFiles[projectId]).length;
+      proj.updatedAt = new Date().toISOString();
+    }
+    this.save();
+    return true;
+  }
+
+  public removeActiveProject(userId?: string): { success: boolean; removedProjectId?: string } {
+    let targetProjectId: string | undefined;
+
+    if (userId && this.data.userActiveProjects[userId]) {
+      targetProjectId = this.data.userActiveProjects[userId];
+      delete this.data.userActiveProjects[userId];
+    } else {
+      const activeProj = this.data.projects.find((p) => p.active);
+      targetProjectId = activeProj?.id;
+    }
+
+    if (targetProjectId) {
+      // Remove from projects array
+      this.data.projects = this.data.projects.filter((p) => p.id !== targetProjectId);
+      // Clean up indexed files
+      delete this.data.projectFiles[targetProjectId];
+      // Clean up project-specific issues
+      this.data.issues = this.data.issues.filter((i) => i.projectId !== targetProjectId);
+      
+      // Clear any other user pointer to this project
+      for (const [uid, pid] of Object.entries(this.data.userActiveProjects)) {
+        if (pid === targetProjectId) {
+          delete this.data.userActiveProjects[uid];
+        }
+      }
+
+      this.save();
+      return { success: true, removedProjectId: targetProjectId };
+    }
+
+    // If no specific target, ensure all are inactive
+    this.data.projects = [];
+    this.data.projectFiles = {};
+    this.data.userActiveProjects = {};
+    this.save();
+    return { success: true };
   }
 }
 

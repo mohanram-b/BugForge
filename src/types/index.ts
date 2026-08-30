@@ -3,6 +3,27 @@ export type Priority = 'Urgent' | 'High' | 'Medium' | 'Low';
 export type IssueStatus = 'Open' | 'Investigating' | 'Fix Proposed' | 'In Progress' | 'Resolved' | 'Verified' | 'Closed' | 'Reopened';
 export type UserRole = 'ADMIN' | 'DEVELOPER' | 'TESTER';
 
+export type ProjectType = 'android_apk' | 'android_aab' | 'zip_archive' | 'source_project' | 'github_repo';
+
+export interface ActiveProject {
+  id: string;
+  userId?: string;
+  name: string;
+  originalFileName: string;
+  fileType: string;
+  fileSize: string;
+  fileSizeBytes: number;
+  projectType: ProjectType | string;
+  status: 'Ready' | 'Indexing' | 'Analyzing' | 'Error';
+  uploadedAt: string;
+  updatedAt: string;
+  indexedFileCount: number;
+  active: boolean;
+  repoUrl?: string;
+  branch?: string;
+  storagePath?: string;
+}
+
 export interface User {
   id: string;
   googleSubjectId?: string;
@@ -206,6 +227,14 @@ export interface GraphNode {
   incoming: string[];
   outgoing: string[];
   details?: string;
+  sequenceOrder?: number;
+  executionTimeMs?: number;
+  startOffsetMs?: number;
+  callDepth?: number;
+  errorProbability?: number;
+  impactScore?: number;
+  triggerReason?: string;
+  callerFunction?: string;
   x?: number;
   y?: number;
 }

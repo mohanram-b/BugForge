@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import { LatentCodeContextEngine } from './server/latentcode';
 import { runAIInvestigation } from './server/gemini';
 import { db, hashPassword, generateToken } from './server/db';
+import { extractProjectIssues } from './src/utils/bugScanner';
 import { 
   Investigation, 
   User, 
@@ -640,11 +641,171 @@ app.get('/api/metrics', (req, res) => {
 });
 
 // -------------------------------------------------------------
+// ACTIVE PROJECT MANAGEMENT APIS (Single Active Project)
+// -------------------------------------------------------------
+app.get('/api/project/active', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const activeProj = db.getActiveProject(userId);
+  res.json({ project: activeProj || null });
+});
+
+app.get('/api/project/files', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const projectId = (req.query.projectId as string) || db.getActiveProject(userId)?.id;
+  
+  if (!projectId) {
+    return res.json({ projectId: null, files: {} });
+  }
+
+  const files = db.getProjectFiles(projectId);
+  res.json({ projectId, files });
+});
+
+app.post('/api/project/upload', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const {
+    name,
+    originalFileName,
+    fileType,
+    fileSize,
+    fileSizeBytes,
+    projectType,
+    files,
+    repoUrl,
+    branch,
+    status
+  } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: 'PROJECT_NAME_REQUIRED', message: 'Project name is required' });
+  }
+
+  const fileMap: Record<string, string> = files || {};
+  const count = Object.keys(fileMap).length;
+  const projId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  const activeProject = db.setActiveProject(
+    userId,
+    {
+      id: projId,
+      userId,
+      name,
+      originalFileName: originalFileName || name,
+      fileType: fileType || 'Source Project',
+      fileSize: fileSize || 'Unknown',
+      fileSizeBytes: fileSizeBytes || 0,
+      projectType: projectType || 'source_project',
+      status: (status as any) || 'Ready',
+      uploadedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      indexedFileCount: count || 1,
+      repoUrl,
+      branch: branch || 'main',
+    },
+    fileMap
+  );
+
+  // Auto-scan uploaded files and generate structured issues for this project
+  if (count > 0) {
+    const autoIssues = extractProjectIssues(fileMap, name, projId);
+    for (const issue of autoIssues) {
+      db.createIssue(issue);
+    }
+  }
+
+  res.status(201).json({
+    success: true,
+    project: activeProject,
+  });
+});
+
+app.post('/api/project/set-active', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const { project, files } = req.body;
+  if (!project || !project.name) {
+    return res.status(400).json({ error: 'INVALID_PROJECT_PAYLOAD' });
+  }
+
+  const fileMap: Record<string, string> = files || {};
+  const projId = project.id || `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const activeProject = db.setActiveProject(
+    userId,
+    {
+      ...project,
+      id: projId,
+      indexedFileCount: Object.keys(fileMap).length || project.indexedFileCount || 1,
+      updatedAt: new Date().toISOString(),
+    },
+    fileMap
+  );
+
+  if (Object.keys(fileMap).length > 0) {
+    const autoIssues = extractProjectIssues(fileMap, project.name, projId);
+    for (const issue of autoIssues) {
+      db.createIssue(issue);
+    }
+  }
+
+  res.json({ success: true, project: activeProject });
+});
+
+app.post('/api/project/remove', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const result = db.removeActiveProject(userId);
+  res.json({ success: true, message: 'Active project removed successfully', result });
+});
+
+app.delete('/api/project/active', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const result = db.removeActiveProject(userId);
+  res.json({ success: true, message: 'Active project removed successfully', result });
+});
+
+app.post('/api/project/save-file', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const { projectId, filePath, content } = req.body;
+
+  const targetProjectId = projectId || db.getActiveProject(userId)?.id;
+  if (!targetProjectId || !filePath) {
+    return res.status(400).json({ error: 'MISSING_PARAMS', message: 'projectId and filePath required' });
+  }
+
+  db.updateProjectFile(targetProjectId, filePath, content || '');
+  res.json({ success: true, message: 'File saved to active project' });
+});
+
+// -------------------------------------------------------------
 // ISSUES CRUD & WORKFLOW APIS
 // -------------------------------------------------------------
 app.get('/api/issues', (req, res) => {
+  const userId = ((req as any).user?.id) || (req.headers['x-user-id'] as string) || 'usr_default';
+  const activeProj = db.getActiveProject(userId);
+  
   let issues = db.getIssues();
-  const { status, severity, priority, assigneeId, search, tag } = req.query;
+  const { status, severity, priority, assigneeId, search, tag, projectId } = req.query;
+
+  // Filter by requested projectId, or activeProject if specified
+  const targetProjId = (projectId && typeof projectId === 'string') 
+    ? projectId 
+    : activeProj?.id;
+
+  if (targetProjId) {
+    let projIssues = issues.filter((i) => i.projectId === targetProjId);
+    
+    // If no issues exist yet for this project, attempt to auto-scan from stored project files
+    if (projIssues.length === 0) {
+      const projFiles = db.getProjectFiles(targetProjId);
+      if (projFiles && Object.keys(projFiles).length > 0) {
+        const projName = activeProj?.id === targetProjId ? activeProj.name : 'Active Project';
+        const generated = extractProjectIssues(projFiles, projName, targetProjId);
+        for (const genIssue of generated) {
+          db.createIssue(genIssue);
+        }
+        issues = db.getIssues();
+      }
+    }
+    issues = issues.filter((i) => i.projectId === targetProjId);
+  }
 
   if (status && typeof status === 'string' && status !== 'ALL') {
     issues = issues.filter((i) => i.status === status);
@@ -707,6 +868,7 @@ app.post('/api/issues', (req, res) => {
     assigneeId,
     environment,
     attachments,
+    projectId,
   } = req.body;
 
   if (!title || !description || !stepsToReproduce || !expectedResult || !actualResult || !severity) {
@@ -722,6 +884,10 @@ app.post('/api/issues', (req, res) => {
     role: 'DEVELOPER',
   };
 
+  const userId = currentUser.id;
+  const activeProj = db.getActiveProject(userId);
+  const resolvedProjectId = projectId || activeProj?.id || 'PRJ-SHOPFLOW';
+
   const nextNum = 100 + db.getIssues().length + 1;
   const newIssueId = `BUG-${nextNum}`;
 
@@ -733,7 +899,7 @@ app.post('/api/issues', (req, res) => {
 
   const issue: Issue = {
     id: newIssueId,
-    projectId: 'PRJ-SHOPFLOW',
+    projectId: resolvedProjectId,
     title,
     description,
     stepsToReproduce,
@@ -799,6 +965,24 @@ app.post('/api/issues', (req, res) => {
   }
 
   res.status(201).json(issue);
+});
+
+app.post('/api/issues/bulk-sync', (req, res) => {
+  const { projectId, issues } = req.body;
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return res.status(400).json({ error: 'NO_ISSUES_PROVIDED' });
+  }
+
+  const saved: Issue[] = [];
+  for (const iss of issues) {
+    const existing = db.getIssueById(iss.id);
+    if (!existing) {
+      db.createIssue(iss);
+      saved.push(iss);
+    }
+  }
+
+  res.json({ success: true, count: saved.length, issues: db.getIssues().filter(i => !projectId || i.projectId === projectId) });
 });
 
 app.patch('/api/issues/:id', (req, res) => {

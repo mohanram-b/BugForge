@@ -24,14 +24,17 @@ import {
   Terminal, 
   AlertCircle,
   X,
-  Lock
+  Lock,
+  FileDown
 } from 'lucide-react';
 import { Investigation, GraphNode } from '../types';
+import { FailurePathGraph } from './FailurePathGraph';
 import { 
   generateMarkdownReport, 
   generateDiagnosticLog, 
   createFixedZipArchive, 
-  triggerFileDownload 
+  triggerFileDownload,
+  exportInvestigationPdf
 } from '../utils/bugScanner';
 
 interface InvestigationScreenProps {
@@ -114,6 +117,7 @@ export const InvestigationScreen: React.FC<InvestigationScreenProps> = ({
   const [copiedDiff, setCopiedDiff] = useState<boolean>(false);
   const [isFixApplied, setIsFixApplied] = useState<boolean>(false);
   const [isDownloadingZip, setIsDownloadingZip] = useState<boolean>(false);
+  const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
 
   const filesSnapshot = investigation.filesSnapshot || {};
   const isVerified = investigation.status === 'RESOLVED' || verification.status === 'PASSED';
@@ -122,6 +126,19 @@ export const InvestigationScreen: React.FC<InvestigationScreenProps> = ({
     navigator.clipboard.writeText(recommendedFix.diff);
     setCopiedDiff(true);
     setTimeout(() => setCopiedDiff(false), 2000);
+  };
+
+  const handleDownloadPdf = async () => {
+    setIsExportingPdf(true);
+    try {
+      await exportInvestigationPdf(investigation, {
+        filename: `${(investigation.project || 'investigation').toLowerCase()}-report.pdf`,
+      });
+    } catch (err) {
+      console.error('Failed to generate investigation PDF:', err);
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   const handleDownloadMarkdown = () => {
@@ -480,102 +497,16 @@ export const InvestigationScreen: React.FC<InvestigationScreenProps> = ({
       </section>
 
       {/* ========================================================================= */}
-      {/* 4. FAILURE PATH CARD */}
+      {/* 4. FAILURE PATH CARD (RECHARTS DATA VISUALIZATION) */}
       {/* ========================================================================= */}
-      <section className="p-6 rounded-2xl bg-[#0E131F] border border-white/10 shadow-sm space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Layers className="w-4 h-4 text-cyan-400" />
-            <h2 className="text-base font-bold text-white uppercase tracking-wider font-mono">
-              Failure Path
-            </h2>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setGraphScale((s) => Math.min(s + 0.1, 1.4))}
-              className="p-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 cursor-pointer"
-              title="Zoom In"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setGraphScale((s) => Math.max(s - 0.1, 0.7))}
-              className="p-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 cursor-pointer"
-              title="Zoom Out"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setGraphScale(1)}
-              className="p-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 cursor-pointer text-xs font-mono"
-              title="Reset"
-            >
-              100%
-            </button>
-          </div>
-        </div>
-
-        {/* Compact Interactive Graph Flow */}
-        <div className="p-4 rounded-xl bg-[#090D14] border border-white/10 overflow-x-auto min-h-[140px] flex items-center justify-center">
-          <div
-            className="flex items-center gap-3 transition-transform duration-150"
-            style={{ transform: `scale(${graphScale})`, transformOrigin: 'center' }}
-          >
-            {graphNodes.map((node, index) => {
-              const isSelected = selectedGraphNode?.id === node.id;
-              const isRootCause = node.role === 'root_cause';
-              const isError = node.status === 'error';
-
-              return (
-                <React.Fragment key={node.id}>
-                  <button
-                    onClick={() => setSelectedGraphNode(node)}
-                    className={`p-3 rounded-xl border text-left font-mono text-xs transition-all cursor-pointer min-w-[150px] shadow-sm ${
-                      isSelected
-                        ? 'border-amber-400 bg-amber-500/20 text-white'
-                        : isRootCause
-                        ? 'border-red-500/50 bg-red-500/10 text-red-300'
-                        : isError
-                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-                        : 'border-white/10 bg-[#141C2B] text-slate-300 hover:border-slate-500'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      <span className="text-[10px] text-slate-400 uppercase">{node.role}</span>
-                      {isRootCause && <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse"></span>}
-                    </div>
-                    <span className="font-bold text-white block truncate">{node.label}</span>
-                    <span className="text-[10px] text-slate-400 block truncate">{node.file}</span>
-                  </button>
-
-                  {index < graphNodes.length - 1 && (
-                    <span className="text-amber-500/70 font-mono text-base font-bold shrink-0">→</span>
-                  )}
-                </React.Fragment>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Selected Node Details Box */}
-        {selectedGraphNode && (
-          <div className="p-3 rounded-xl bg-[#141C2B] border border-white/5 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
-            <div className="space-y-0.5">
-              <span className="text-slate-400">
-                Selected: <strong className="text-white">{selectedGraphNode.label}</strong>
-              </span>
-              <p className="text-[11px] text-slate-300">
-                File: {selectedGraphNode.file} {selectedGraphNode.line && `(line ${selectedGraphNode.line})`} • Role: {selectedGraphNode.role} • Status: {selectedGraphNode.status}
-              </p>
-            </div>
-            {selectedGraphNode.details && (
-              <span className="text-amber-300 text-[11px] bg-amber-950/40 px-2.5 py-1 rounded border border-amber-500/20">
-                {selectedGraphNode.details}
-              </span>
-            )}
-          </div>
-        )}
+      <section className="space-y-4">
+        <FailurePathGraph
+          nodes={graphNodes}
+          graphData={investigation.dependencyGraph}
+          selectedNodeId={selectedGraphNode?.id}
+          onSelectNode={(node) => setSelectedGraphNode(node)}
+          onOpenFileInExplorer={(file, line) => setInspectModalFile({ file, line })}
+        />
       </section>
 
       {/* ========================================================================= */}
@@ -892,13 +823,31 @@ export const InvestigationScreen: React.FC<InvestigationScreenProps> = ({
           Ready to share or archive this root cause diagnosis?
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleDownloadPdf}
+            disabled={isExportingPdf}
+            className="px-4 py-2.5 rounded-xl bg-[#F97316] hover:bg-[#EA580C] text-black font-mono text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-sm disabled:opacity-50"
+          >
+            {isExportingPdf ? (
+              <>
+                <RotateCcw className="w-4 h-4 animate-spin" />
+                <span>Exporting PDF...</span>
+              </>
+            ) : (
+              <>
+                <FileDown className="w-4 h-4" />
+                <span>Export PDF Report</span>
+              </>
+            )}
+          </button>
+
           <button
             onClick={handleDownloadMarkdown}
             className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white font-mono text-xs font-bold border border-white/10 flex items-center gap-2 transition-all cursor-pointer shadow-sm"
           >
             <Download className="w-4 h-4 text-[#F97316]" />
-            <span>Export Report (Markdown)</span>
+            <span>Markdown</span>
           </button>
 
           <button

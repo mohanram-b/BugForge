@@ -12,7 +12,17 @@ import {
   User as UserIcon,
   Sparkles
 } from 'lucide-react';
-import { auth, googleProvider, signInWithPopup, signInWithRedirect, syncUserProfile } from '../lib/firebase';
+import { 
+  auth, 
+  googleProvider, 
+  signInWithPopup, 
+  signInWithRedirect, 
+  syncUserProfile,
+  sendAccountPasswordReset,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile
+} from '../lib/firebase';
 import { User } from '../types';
 
 interface LoginScreenProps {
@@ -75,22 +85,30 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // Handle Email/Password Sign-in or Registration
+  // Handle Email/Password Sign-in or Registration or Password Reset
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccessMessage(null);
 
+    // 1. Password Reset Request Flow
     if (mode === 'forgot') {
-      if (!email.trim()) {
-        setError('Please enter your email address');
+      const cleanEmail = email.trim();
+      if (!cleanEmail) {
+        setError('Please enter your account email address');
         return;
       }
       setLoading(true);
-      setTimeout(() => {
+      try {
+        // Dispatch real password reset via Firebase Authentication
+        await sendAccountPasswordReset(cleanEmail);
+        setSuccessMessage(`Password recovery link successfully sent to ${cleanEmail}. Please check your inbox (and spam folder) to reset your password.`);
+      } catch (err: any) {
+        console.error('[Password Reset Request Failed]', err);
+        setError(err.message || 'Failed to send password reset email. Please verify the email address.');
+      } finally {
         setLoading(false);
-        setSuccessMessage(`Password recovery instructions have been sent to ${email}`);
-      }, 700);
+      }
       return;
     }
 
@@ -103,59 +121,118 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
     try {
       if (mode === 'signup') {
-        const res = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: name.trim() || email.split('@')[0],
-            email: email.trim(),
-            password: password,
-            role: 'DEVELOPER',
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.message || 'Registration failed');
+        let firebaseCreated = false;
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+          if (userCredential.user) {
+            await updateProfile(userCredential.user, {
+              displayName: name.trim() || email.split('@')[0],
+            });
+            const profile = await syncUserProfile(userCredential.user);
+            const mappedUser: User = {
+              id: profile.uid,
+              name: profile.displayName,
+              email: profile.email,
+              avatarUrl: profile.photoURL,
+              role: profile.role,
+              createdAt: profile.createdAt,
+              lastLoginAt: profile.lastLoginAt,
+              mfaEnabled: profile.mfaEnabled,
+            };
+            firebaseCreated = true;
+            onLoginSuccess(mappedUser);
+            return;
+          }
+        } catch (fbErr: any) {
+          console.warn('[Firebase Signup Note]', fbErr?.code, fbErr?.message);
+          // If already in use, throw clear error
+          if (fbErr?.code === 'auth/email-already-in-use') {
+            throw new Error('An account with this email already exists. Please sign in.');
+          }
+          if (fbErr?.code === 'auth/weak-password') {
+            throw new Error('Password should be at least 6 characters.');
+          }
         }
 
-        onLoginSuccess(data.user);
+        if (!firebaseCreated) {
+          const res = await fetch('/api/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: name.trim() || email.split('@')[0],
+              email: email.trim(),
+              password: password,
+              role: 'DEVELOPER',
+            }),
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.message || 'Registration failed');
+          }
+
+          onLoginSuccess(data.user);
+        }
       } else {
         // Sign in
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: email.trim(),
-            password: password,
-          }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          // If demo/quick fallback account is needed for developer convenience:
-          if (res.status === 401 && (email.includes('@') && password.length >= 4)) {
-            // Auto register new account if not existing for instant onboarding
-            const autoRegRes = await fetch('/api/auth/register', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                name: email.split('@')[0],
-                email: email.trim(),
-                password: password,
-                role: 'DEVELOPER',
-              }),
-            });
-            if (autoRegRes.ok) {
-              const regData = await autoRegRes.json();
-              onLoginSuccess(regData.user);
-              return;
-            }
+        let firebaseSignedIn = false;
+        try {
+          const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+          if (userCredential.user) {
+            const profile = await syncUserProfile(userCredential.user);
+            const mappedUser: User = {
+              id: profile.uid,
+              name: profile.displayName,
+              email: profile.email,
+              avatarUrl: profile.photoURL,
+              role: profile.role,
+              createdAt: profile.createdAt,
+              lastLoginAt: profile.lastLoginAt,
+              mfaEnabled: profile.mfaEnabled,
+            };
+            firebaseSignedIn = true;
+            onLoginSuccess(mappedUser);
+            return;
           }
-          throw new Error(data.message || 'Invalid email or password');
+        } catch (fbErr: any) {
+          console.warn('[Firebase Signin Note]', fbErr?.code);
         }
 
-        onLoginSuccess(data.user);
+        if (!firebaseSignedIn) {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: email.trim(),
+              password: password,
+            }),
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            // Auto register demo session if valid
+            if (res.status === 401 && (email.includes('@') && password.length >= 4)) {
+              const autoRegRes = await fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: email.split('@')[0],
+                  email: email.trim(),
+                  password: password,
+                  role: 'DEVELOPER',
+                }),
+              });
+              if (autoRegRes.ok) {
+                const regData = await autoRegRes.json();
+                onLoginSuccess(regData.user);
+                return;
+              }
+            }
+            throw new Error(data.message || 'Invalid email or password');
+          }
+
+          onLoginSuccess(data.user);
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Authentication failed. Please verify your credentials.');
@@ -163,6 +240,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       setLoading(false);
     }
   };
+
 
   return (
     <div className="relative min-h-screen w-full bg-[#07080B] text-[#E2E8F0] flex flex-col items-center justify-center p-4 sm:p-6 overflow-hidden font-sans selection:bg-[#F97316]/30 selection:text-white">
