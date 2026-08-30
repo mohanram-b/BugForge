@@ -39,6 +39,7 @@ import {
   Firestore 
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { maskEmail, maskUrl, authLogger } from '../utils/authDiagnostics';
 
 // Safely resolve configuration preferring environment variables for secure GitHub publishing
 const env = (import.meta as any).env || {};
@@ -104,17 +105,34 @@ export {
 export type { FirebaseUser, ActionCodeSettings };
 
 /**
- * Resolve the dynamic application base URL, supporting local dev, Cloud Run, and production Firebase domains
+ * Resolve the dynamic application base URL, supporting APP_BASE_URL environment variable,
+ * window.location.origin, and production Firebase domains rather than hardcoded localhost paths.
  */
 export function getAppBaseUrl(): string {
-  if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
-    return window.location.origin;
+  // 1. Check environment variable overrides (VITE_APP_BASE_URL or APP_BASE_URL)
+  const metaEnv = typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined;
+  const envBaseUrl = (
+    metaEnv?.VITE_APP_BASE_URL ||
+    metaEnv?.APP_BASE_URL ||
+    (typeof process !== 'undefined' && process.env ? process.env.APP_BASE_URL : undefined)
+  ) as string | undefined;
+
+  if (envBaseUrl && typeof envBaseUrl === 'string' && envBaseUrl.trim()) {
+    return envBaseUrl.trim().replace(/\/+$/, '');
   }
+
+  // 2. Use current browser origin if available
+  if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
+    return window.location.origin.replace(/\/+$/, '');
+  }
+
+  // 3. Fallback to production Firebase hosting domain
   return 'https://bugforge-17b81.firebaseapp.com';
 }
 
 /**
  * Construct compliant Firebase Auth Action Code Settings ensuring continueUrl points to base production domain
+ * with deep-linking support via standard route parameters.
  */
 export function getActionCodeSettings(continuePath = '/'): ActionCodeSettings {
   const baseUrl = getAppBaseUrl();
@@ -214,6 +232,40 @@ export interface UserAuthProviderInfo {
 }
 
 /**
+ * Inspect providerId list on a Firebase User object to check for Google provider
+ */
+export function isFirebaseUserGoogle(user?: FirebaseUser | null): boolean {
+  if (!user) return false;
+  return Boolean(
+    user.providerData?.some(p => p.providerId === 'google.com') ||
+    user.providerId === 'google.com'
+  );
+}
+
+/**
+ * Inspect providerId list on a Firebase User object to check for password provider
+ */
+export function isFirebaseUserPassword(user?: FirebaseUser | null): boolean {
+  if (!user) return false;
+  return Boolean(
+    user.providerData?.some(p => p.providerId === 'password') ||
+    user.providerId === 'password'
+  );
+}
+
+/**
+ * Get all providerIds from a Firebase User object
+ */
+export function getFirebaseUserProviders(user?: FirebaseUser | null): string[] {
+  if (!user) return [];
+  const providers = user.providerData?.map(p => p.providerId) || [];
+  if (user.providerId && !providers.includes(user.providerId)) {
+    providers.push(user.providerId);
+  }
+  return providers;
+}
+
+/**
  * Detect whether an account email is associated with Google Identity SSO vs standard password credentials
  */
 export async function detectEmailAuthProviders(email: string): Promise<UserAuthProviderInfo> {
@@ -224,12 +276,11 @@ export async function detectEmailAuthProviders(email: string): Promise<UserAuthP
     providers: []
   };
 
-  // 1. Check active session if email matches
+  // 1. Check active session if email matches by inspecting providerData and providerId
   if (auth.currentUser && auth.currentUser.email?.toLowerCase() === cleanEmail) {
-    const activeProviders = auth.currentUser.providerData.map(p => p.providerId);
-    if (activeProviders.includes('google.com')) result.isGoogleUser = true;
-    if (activeProviders.includes('password')) result.isPasswordUser = true;
-    result.providers = activeProviders;
+    result.isGoogleUser = isFirebaseUserGoogle(auth.currentUser);
+    result.isPasswordUser = isFirebaseUserPassword(auth.currentUser);
+    result.providers = getFirebaseUserProviders(auth.currentUser);
   }
 
   // 2. Query Firebase Auth sign-in methods for email
@@ -253,9 +304,11 @@ export async function detectEmailAuthProviders(email: string): Promise<UserAuthP
       const userData = snap.docs[0].data() as AppUserProfile;
       if (userData.providerId === 'google.com' || (userData as any).googleSubjectId) {
         result.isGoogleUser = true;
+        if (!result.providers.includes('google.com')) result.providers.push('google.com');
       }
       if (userData.providerId === 'password') {
         result.isPasswordUser = true;
+        if (!result.providers.includes('password')) result.providers.push('password');
       }
     }
   } catch (err) {
@@ -275,26 +328,58 @@ export async function sendAccountPasswordReset(email: string, continuePath = '/'
     throw new Error('Please specify a valid email address.');
   }
 
+  // Explicit check for active user session if authenticated with Google
+  if (auth.currentUser && auth.currentUser.email?.toLowerCase() === cleanEmail.toLowerCase()) {
+    if (isFirebaseUserGoogle(auth.currentUser) && !isFirebaseUserPassword(auth.currentUser)) {
+      throw new Error('This account is authenticated via Google Identity Provider (google.com). Passwords cannot be reset because security credentials are managed through your Google Account.');
+    }
+  }
+
   const actionCodeSettings = getActionCodeSettings(continuePath);
+  const startTime = Date.now();
+  authLogger.initiated('Password Reset Email Dispatch', {
+    targetEmail: cleanEmail,
+    continueUrl: actionCodeSettings.url,
+  });
 
   try {
     // Attempt with ActionCodeSettings for smooth in-app redirection to production URL
     await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
+    const duration = Date.now() - startTime;
     console.info(`[Firebase Auth] Password reset email successfully accepted for: ${cleanEmail} (continueUrl: ${actionCodeSettings.url})`);
+    authLogger.success('Password Reset Email Dispatch', {
+      targetEmail: cleanEmail,
+      durationMs: duration,
+    });
     return { success: true, email: cleanEmail };
   } catch (firstErr: any) {
     // If domain or action code settings failed, attempt standard fallback
     if (firstErr?.code === 'auth/unauthorized-continue-uri' || firstErr?.code === 'auth/invalid-continue-uri') {
       try {
         await sendPasswordResetEmail(auth, cleanEmail);
+        const duration = Date.now() - startTime;
         console.info(`[Firebase Auth] Password reset email (standard) accepted for: ${cleanEmail}`);
+        authLogger.success('Password Reset Email Dispatch (Standard Fallback)', {
+          targetEmail: cleanEmail,
+          durationMs: duration,
+        });
         return { success: true, email: cleanEmail };
       } catch (fallbackErr: any) {
+        const duration = Date.now() - startTime;
         console.error('[Firebase Auth Error] Password reset failed:', fallbackErr?.code, fallbackErr?.message);
+        authLogger.error('Password Reset Email Dispatch (Standard Fallback)', fallbackErr, {
+          targetEmail: cleanEmail,
+          durationMs: duration,
+        });
         throw new Error(getFirebaseAuthErrorMessage(fallbackErr));
       }
     }
+    const duration = Date.now() - startTime;
     console.error('[Firebase Auth Error] Password reset failed:', firstErr?.code, firstErr?.message);
+    authLogger.error('Password Reset Email Dispatch', firstErr, {
+      targetEmail: cleanEmail,
+      durationMs: duration,
+    });
     throw new Error(getFirebaseAuthErrorMessage(firstErr));
   }
 }
@@ -308,24 +393,59 @@ export async function sendUserEmailVerification(continuePath = '/'): Promise<{ s
     throw new Error('No authenticated user session found to verify.');
   }
 
+  // Explicit check: Google provider accounts are pre-verified by Google SSO
+  if (isFirebaseUserGoogle(currentUser)) {
+    console.info('[Firebase Auth] User is authenticated via Google provider; email is automatically verified.');
+    authLogger.success('Email Verification (Google SSO Pre-verified)', {
+      targetEmail: currentUser.email,
+      durationMs: 0,
+    });
+    return { success: true, email: currentUser.email };
+  }
+
   const actionCodeSettings = getActionCodeSettings(continuePath);
+  const startTime = Date.now();
+  authLogger.initiated('Email Verification Dispatch', {
+    targetEmail: currentUser.email,
+    continueUrl: actionCodeSettings.url,
+  });
 
   try {
     await sendEmailVerification(currentUser, actionCodeSettings);
+    const duration = Date.now() - startTime;
     console.info(`[Firebase Auth] Email verification message accepted for: ${currentUser.email} (continueUrl: ${actionCodeSettings.url})`);
+    authLogger.success('Email Verification Dispatch', {
+      targetEmail: currentUser.email,
+      durationMs: duration,
+    });
     return { success: true, email: currentUser.email };
   } catch (firstErr: any) {
     if (firstErr?.code === 'auth/unauthorized-continue-uri' || firstErr?.code === 'auth/invalid-continue-uri') {
       try {
         await sendEmailVerification(currentUser);
+        const duration = Date.now() - startTime;
         console.info(`[Firebase Auth] Email verification (standard) accepted for: ${currentUser.email}`);
+        authLogger.success('Email Verification Dispatch (Standard Fallback)', {
+          targetEmail: currentUser.email,
+          durationMs: duration,
+        });
         return { success: true, email: currentUser.email };
       } catch (fallbackErr: any) {
+        const duration = Date.now() - startTime;
         console.error('[Firebase Auth Error] Email verification failed:', fallbackErr?.code, fallbackErr?.message);
+        authLogger.error('Email Verification Dispatch (Standard Fallback)', fallbackErr, {
+          targetEmail: currentUser.email,
+          durationMs: duration,
+        });
         throw new Error(getFirebaseAuthErrorMessage(fallbackErr));
       }
     }
+    const duration = Date.now() - startTime;
     console.error('[Firebase Auth Error] Email verification failed:', firstErr?.code, firstErr?.message);
+    authLogger.error('Email Verification Dispatch', firstErr, {
+      targetEmail: currentUser.email,
+      durationMs: duration,
+    });
     throw new Error(getFirebaseAuthErrorMessage(firstErr));
   }
 }

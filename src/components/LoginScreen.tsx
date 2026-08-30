@@ -24,6 +24,12 @@ import {
   updateProfile
 } from '../lib/firebase';
 import { User } from '../types';
+import { 
+  AuthActionState, 
+  createInitialAuthActionState, 
+  executeAwaitedAuthAction, 
+  maskEmail 
+} from '../utils/authDiagnostics';
 
 interface LoginScreenProps {
   onLoginSuccess: (user: User) => void;
@@ -39,6 +45,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [googleLoading, setGoogleLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Standardized AuthActionState for email actions (Password Reset)
+  const [resetState, setResetState] = useState<AuthActionState<{ success: boolean; email: string }>>(
+    createInitialAuthActionState()
+  );
 
   // Handle Google Firebase authentication
   const handleGoogleSignIn = async () => {
@@ -96,13 +107,31 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       const cleanEmail = email.trim();
       if (!cleanEmail) {
         setError('Please enter your account email address');
+        setResetState({
+          status: 'error',
+          data: null,
+          message: 'Please enter your account email address',
+          errorCode: 'auth/missing-email',
+          startedAt: null,
+          completedAt: null,
+          durationMs: null,
+        });
         return;
       }
       setLoading(true);
       try {
-        // Dispatch real password reset via Firebase Authentication
-        await sendAccountPasswordReset(cleanEmail);
-        setSuccessMessage(`Password recovery link successfully sent to ${cleanEmail}. Please check your inbox (and spam folder) to reset your password.`);
+        // Dispatch real password reset via Firebase Authentication, strictly awaiting provider confirmation
+        const result = await executeAwaitedAuthAction(
+          'Password Reset Request',
+          () => sendAccountPasswordReset(cleanEmail),
+          {
+            targetEmail: cleanEmail,
+            onStateChange: (newState) => {
+              setResetState(newState);
+            },
+          }
+        );
+        setSuccessMessage(`Password recovery link successfully dispatched to ${maskEmail(result.email)}. Please check your inbox.`);
       } catch (err: any) {
         console.error('[Password Reset Request Failed]', err);
         setError(err.message || 'Failed to send password reset email. Please verify the email address.');
@@ -287,18 +316,103 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         {/* Auth Card */}
         <div className="w-full bg-[#0D1017]/90 backdrop-blur-xl border border-[#1E2333] hover:border-[#282F45] rounded-2xl p-6 sm:p-8 shadow-2xl transition-all duration-200">
           
-          {/* Notifications */}
-          {error && (
+          {/* Notifications & Action State Feedback */}
+          {error && resetState.status !== 'error' && (
             <div className="mb-5 p-3.5 rounded-lg bg-red-950/40 border border-red-800/50 text-red-300 text-xs flex items-start gap-2.5 leading-relaxed">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
-          {successMessage && (
+          {successMessage && resetState.status !== 'success' && (
             <div className="mb-5 p-3.5 rounded-lg bg-emerald-950/40 border border-emerald-800/50 text-emerald-300 text-xs flex items-start gap-2.5 leading-relaxed">
               <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
               <span>{successMessage}</span>
+            </div>
+          )}
+
+          {/* Standardized Password Reset Lifecycle Feedback */}
+          {mode === 'forgot' && resetState.status === 'loading' && (
+            <div className="mb-5 p-4 rounded-xl bg-orange-950/30 border border-orange-500/40 text-orange-200 text-xs space-y-2">
+              <div className="flex items-center gap-2 font-medium text-orange-300">
+                <Loader2 className="w-4 h-4 animate-spin text-[#F97316]" />
+                <span>Contacting Firebase Authentication Provider...</span>
+              </div>
+              <p className="text-[11px] text-orange-300/80 leading-relaxed font-mono">
+                Dispatching secure password reset token to: <span className="text-white font-semibold">{maskEmail(email)}</span>
+              </p>
+            </div>
+          )}
+
+          {mode === 'forgot' && resetState.status === 'success' && (
+            <div className="mb-5 p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/50 text-emerald-200 text-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-semibold text-emerald-300">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>Password Reset Link Dispatched</span>
+                </div>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px]">
+                  HTTP 200 OK
+                </span>
+              </div>
+              <p className="text-[11px] text-emerald-200/90 leading-relaxed">
+                Firebase has accepted and routed your password recovery link to{' '}
+                <strong className="text-white font-mono">{maskEmail(resetState.data?.email || email)}</strong>.
+                Please check your inbox (and spam folder) to set a new password.
+              </p>
+              <div className="pt-1 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('signin');
+                    setResetState(createInitialAuthActionState());
+                    setError(null);
+                    setSuccessMessage(null);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-xs font-medium cursor-pointer transition-colors"
+                >
+                  Return to Sign In
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetState(createInitialAuthActionState());
+                    setSuccessMessage(null);
+                  }}
+                  className="text-[11px] text-slate-400 hover:text-slate-200 underline cursor-pointer"
+                >
+                  Send another link
+                </button>
+              </div>
+            </div>
+          )}
+
+          {mode === 'forgot' && resetState.status === 'error' && (
+            <div className="mb-5 p-4 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-semibold text-rose-300">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Password Reset Request Failed</span>
+                </div>
+                {resetState.errorCode && (
+                  <span className="px-1.5 py-0.5 rounded bg-rose-900/60 border border-rose-700/50 text-rose-300 font-mono text-[10px]">
+                    {resetState.errorCode}
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-rose-200/90 leading-relaxed font-sans">
+                {resetState.message}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setResetState(createInitialAuthActionState());
+                  setError(null);
+                }}
+                className="text-[11px] text-rose-300 hover:text-rose-100 font-medium underline cursor-pointer"
+              >
+                Retry with different email
+              </button>
             </div>
           )}
 

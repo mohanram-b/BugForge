@@ -13,7 +13,8 @@ import {
   X, 
   ArrowRight,
   ExternalLink,
-  Info
+  Info,
+  ShieldAlert
 } from 'lucide-react';
 import { 
   auth, 
@@ -25,8 +26,12 @@ import {
   getFirebaseAuthErrorMessage,
   sendAccountPasswordReset,
   detectEmailAuthProviders,
-  getAppBaseUrl
+  getAppBaseUrl,
+  isFirebaseUserGoogle,
+  isFirebaseUserPassword,
+  getFirebaseUserProviders
 } from '../lib/firebase';
+import { authLogger, maskEmail, maskUrl } from '../utils/authDiagnostics';
 
 interface AuthActionModalProps {
   onComplete?: () => void;
@@ -39,9 +44,11 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [targetEmail, setTargetEmail] = useState<string>('');
 
-  // Provider Detection
+  // Provider Detection & Verification
   const [isCheckingProvider, setIsCheckingProvider] = useState<boolean>(false);
   const [isGoogleProviderUser, setIsGoogleProviderUser] = useState<boolean>(false);
+  const [isPasswordProviderUser, setIsPasswordProviderUser] = useState<boolean>(false);
+  const [detectedProviders, setDetectedProviders] = useState<string[]>([]);
   const [isSigningInWithGoogle, setIsSigningInWithGoogle] = useState<boolean>(false);
 
   // Form & Execution State
@@ -71,19 +78,99 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
       setContinueUrl(parsedContinueUrl);
       setIsOpen(true);
 
+      // Check active Firebase user's providerId via providerData explicitly
+      const activeUser = auth.currentUser;
+      const checkUserIsGoogle = (user: typeof activeUser) => {
+        if (!user) return false;
+        // Explicit inspection of user.providerData array for google.com provider
+        const hasGoogleInProviderData = Boolean(
+          user.providerData && 
+          Array.isArray(user.providerData) && 
+          user.providerData.some((p) => p && p.providerId === 'google.com')
+        );
+        const isDirectGoogle = user.providerId === 'google.com';
+        return Boolean(hasGoogleInProviderData || isDirectGoogle || isFirebaseUserGoogle(user));
+      };
+
+      // Diagnostic logging of current auth state and providerId
+      const activeProviders = activeUser ? getFirebaseUserProviders(activeUser) : [];
+      const activeGoogle = activeUser ? checkUserIsGoogle(activeUser) : false;
+      const activePassword = activeUser ? isFirebaseUserPassword(activeUser) : false;
+
+      authLogger.initiated(`AuthActionModal [${parsedMode}] Initialized`, {
+        targetEmail: activeUser?.email || undefined,
+        continueUrl: parsedContinueUrl || undefined,
+      });
+
+      console.info(
+        `[Auth Diagnostic : ActionModal] Auth State: ${activeUser ? 'authenticated' : 'unauthenticated'} | ` +
+        `UID: ${activeUser?.uid || 'none'} | providerId: ${activeUser?.providerId || 'none'} | ` +
+        `providerData: [${activeProviders.join(', ')}] | isGoogleProvider: ${activeGoogle} | mode: ${parsedMode}`
+      );
+
+      if (activeUser) {
+        setDetectedProviders(activeProviders);
+        setIsGoogleProviderUser(activeGoogle);
+        setIsPasswordProviderUser(activePassword);
+      }
+
+      // Real-time listener for auth state to inspect providerId and providerData on the Firebase user object
+      const unsubscribe = auth.onAuthStateChanged((user) => {
+        const userProviders = user ? getFirebaseUserProviders(user) : [];
+        const isGoogle = checkUserIsGoogle(user);
+        const isPassword = user ? isFirebaseUserPassword(user) : false;
+        
+        console.info(
+          `[Auth Diagnostic : Auth State Changed] Auth State: ${user ? 'authenticated' : 'unauthenticated'} | ` +
+          `providerId: ${user?.providerId || 'none'} | providerData: [${userProviders.join(', ')}] | ` +
+          `isGoogle: ${isGoogle} | emailVerified: ${user?.emailVerified || false}`
+        );
+
+        setDetectedProviders(userProviders);
+        if (isGoogle) {
+          setIsGoogleProviderUser(true);
+          setIsPasswordProviderUser(false);
+        } else if (isPassword) {
+          setIsPasswordProviderUser(true);
+          setIsGoogleProviderUser(false);
+        }
+      });
+
       if (parsedMode === 'resetPassword') {
         setIsVerifyingCode(true);
+        const startTime = Date.now();
+        authLogger.initiated('Verify Password Reset Action Code', {
+          continueUrl: parsedContinueUrl || undefined,
+        });
+
         verifyPasswordResetCode(auth, parsedCode)
           .then(async (email) => {
+            const duration = Date.now() - startTime;
+            authLogger.success('Verify Password Reset Action Code', {
+              targetEmail: email,
+              durationMs: duration,
+            });
             setTargetEmail(email);
             setResendEmail(email);
 
-            // Check if the user is a Google-provider user
+            // Detailed inspection of authentication provider for target account
             setIsCheckingProvider(true);
             try {
               const providerInfo = await detectEmailAuthProviders(email);
+              setDetectedProviders(providerInfo.providers);
+              
+              console.info(
+                `[Auth Diagnostic : Reset Account Provider Check] Target: ${maskEmail(email)} | ` +
+                `Providers: [${providerInfo.providers.join(', ')}] | isGoogle: ${providerInfo.isGoogleUser}`
+              );
+
               if (providerInfo.isGoogleUser && !providerInfo.isPasswordUser) {
+                // Explicitly identify Google SSO user without password credentials
                 setIsGoogleProviderUser(true);
+                setIsPasswordProviderUser(false);
+              } else if (providerInfo.isPasswordUser) {
+                setIsPasswordProviderUser(true);
+                setIsGoogleProviderUser(false);
               }
             } catch (pErr) {
               console.warn('[Provider Check Note]', pErr);
@@ -92,6 +179,10 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
             }
           })
           .catch((err) => {
+            const duration = Date.now() - startTime;
+            authLogger.error('Verify Password Reset Action Code', err, {
+              durationMs: duration,
+            });
             console.error('[Firebase Action Code Verification Error]', err);
             setError(getFirebaseAuthErrorMessage(err));
           })
@@ -99,12 +190,31 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
             setIsVerifyingCode(false);
           });
       } else if (parsedMode === 'verifyEmail') {
+        // If current user is authenticated with Google provider, email is already verified
+        if (activeUser && checkUserIsGoogle(activeUser)) {
+          console.info('[Auth Diagnostic : VerifyEmail] Active user has google.com provider in providerData; skipping manual verification code.');
+          setSuccess('Your account email is verified by Google Identity SSO (providerId: google.com). Manual email verification triggers are disabled for OAuth accounts.');
+          setIsGoogleProviderUser(true);
+          return;
+        }
+
         setIsLoading(true);
+        const startTime = Date.now();
+        authLogger.initiated('Apply Email Verification Action Code');
+
         applyActionCode(auth, parsedCode)
           .then(() => {
+            const duration = Date.now() - startTime;
+            authLogger.success('Apply Email Verification Action Code', {
+              durationMs: duration,
+            });
             setSuccess('Your email address has been successfully verified! You now have full verified access to BugForge.');
           })
           .catch((err) => {
+            const duration = Date.now() - startTime;
+            authLogger.error('Apply Email Verification Action Code', err, {
+              durationMs: duration,
+            });
             console.error('[Firebase Email Verification Error]', err);
             setError(getFirebaseAuthErrorMessage(err));
           })
@@ -112,6 +222,10 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
             setIsLoading(false);
           });
       }
+
+      return () => {
+        unsubscribe();
+      };
     }
   }, []);
 
@@ -147,13 +261,20 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
   const handleGoogleSignIn = async () => {
     setError(null);
     setIsSigningInWithGoogle(true);
+    const startTime = Date.now();
+    authLogger.initiated('Google SSO in ActionModal');
+
     try {
       await signInWithPopup(auth, googleProvider);
+      const duration = Date.now() - startTime;
+      authLogger.success('Google SSO in ActionModal', { durationMs: duration });
       setSuccess('Successfully signed in with Google Identity SSO.');
       setTimeout(() => {
         handleClose();
       }, 1000);
     } catch (err: any) {
+      const duration = Date.now() - startTime;
+      authLogger.error('Google SSO in ActionModal', err, { durationMs: duration });
       console.error('[Google SSO in Modal Error]', err);
       setError(getFirebaseAuthErrorMessage(err));
     } finally {
@@ -164,6 +285,13 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
   const handleConfirmPasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!oobCode) return;
+
+    // Explicit check: Prevent resetting password for Google SSO users
+    if (isGoogleProviderUser) {
+      setError('Password reset is disabled for accounts authenticated via Google Identity Provider (google.com). Please sign in using Google.');
+      return;
+    }
+
     setError(null);
     setSuccess(null);
 
@@ -177,11 +305,26 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
       return;
     }
 
+    const startTime = Date.now();
+    authLogger.initiated('Confirm Password Reset', {
+      targetEmail: targetEmail || undefined,
+    });
+
     try {
       setIsLoading(true);
       await confirmPasswordReset(auth, oobCode, newPassword);
+      const duration = Date.now() - startTime;
+      authLogger.success('Confirm Password Reset', {
+        targetEmail: targetEmail || undefined,
+        durationMs: duration,
+      });
       setSuccess('Your password has been successfully updated. You can now sign in with your new password.');
     } catch (err: any) {
+      const duration = Date.now() - startTime;
+      authLogger.error('Confirm Password Reset', err, {
+        targetEmail: targetEmail || undefined,
+        durationMs: duration,
+      });
       console.error('[Firebase Reset Confirmation Error]', err);
       setError(getFirebaseAuthErrorMessage(err));
     } finally {
@@ -191,14 +334,23 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
 
   const handleResendResetLink = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!resendEmail.trim()) return;
+    const cleanEmail = resendEmail.trim();
+    if (!cleanEmail) return;
+
     setError(null);
     setResendSuccess(null);
 
+    // Explicit check: Check if resend email is a Google SSO user
     try {
       setIsResending(true);
-      await sendAccountPasswordReset(resendEmail.trim());
-      setResendSuccess(`A fresh password reset link has been dispatched to ${resendEmail.trim()}. Please check your inbox.`);
+      const providerCheck = await detectEmailAuthProviders(cleanEmail);
+      if (providerCheck.isGoogleUser && !providerCheck.isPasswordUser) {
+        setError(`The account ${cleanEmail} is authenticated exclusively via Google SSO (providerId: google.com). Password reset links cannot be dispatched.`);
+        return;
+      }
+
+      await sendAccountPasswordReset(cleanEmail);
+      setResendSuccess(`A fresh password reset link has been dispatched to ${cleanEmail}. Please check your inbox.`);
     } catch (err: any) {
       setError(getFirebaseAuthErrorMessage(err));
     } finally {
@@ -257,6 +409,28 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
               </button>
             </div>
 
+            {/* Provider Inspection Badge */}
+            {detectedProviders.length > 0 && (
+              <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-[#121622] border border-[#1E2333] text-[11px]">
+                <span className="text-slate-400">Auth Provider:</span>
+                <span className="font-mono font-medium text-slate-200 flex items-center gap-1.5">
+                  {isGoogleProviderUser ? (
+                    <span className="text-sky-400 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+                      Google Identity SSO (google.com)
+                    </span>
+                  ) : isPasswordProviderUser ? (
+                    <span className="text-amber-400 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                      Password Credentials (password)
+                    </span>
+                  ) : (
+                    <span>{detectedProviders.join(', ')}</span>
+                  )}
+                </span>
+              </div>
+            )}
+
             {/* Error Notification */}
             {error && (
               <div className="p-3.5 rounded-xl bg-rose-950/50 border border-rose-800/60 text-rose-300 text-xs flex items-start gap-2.5">
@@ -291,10 +465,10 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
                 {isVerifyingCode || isCheckingProvider ? (
                   <div className="py-8 flex flex-col items-center justify-center gap-3 text-slate-400 text-xs">
                     <RefreshCw className="w-6 h-6 animate-spin text-[#F97316]" />
-                    <span>Verifying authentication provider details...</span>
+                    <span>Inspecting Firebase authentication providerId...</span>
                   </div>
                 ) : isGoogleProviderUser ? (
-                  /* GOOGLE SSO USER DETECTED: Prevent showing password-reset form */
+                  /* GOOGLE SSO USER DETECTED: Specifically hide the Password Reset section & form */
                   <div className="space-y-4 pt-1">
                     <div className="p-4 rounded-xl bg-sky-950/40 border border-sky-800/50 space-y-3">
                       <div className="flex items-center gap-2.5 text-sky-400 font-semibold text-xs">
@@ -316,16 +490,16 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
                             d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                           />
                         </svg>
-                        <span>Google Identity Account</span>
+                        <span>Google Identity Provider (providerId: google.com)</span>
                       </div>
                       
                       <p className="text-xs text-slate-300 leading-relaxed">
-                        The account <span className="font-mono text-white font-medium">{targetEmail}</span> is authenticated exclusively via <strong>Google Identity SSO</strong>.
+                        The account <span className="font-mono text-white font-medium">{targetEmail || 'Google User'}</span> is authenticated exclusively via <strong>Google Identity SSO</strong>.
                       </p>
                       
                       <div className="flex items-start gap-2 text-[11px] text-slate-400 bg-[#07080B]/50 p-2.5 rounded-lg border border-sky-900/30">
                         <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
-                        <span>Google SSO accounts do not maintain a separate password on BugForge. Security and passwords are managed through your Google Account.</span>
+                        <span>Google SSO accounts do not store raw website passwords in Firebase. Password reset forms are disabled for this account type.</span>
                       </div>
                     </div>
 
@@ -383,7 +557,7 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
                     </div>
                   </div>
                 ) : error ? (
-                  /* If token is invalid or expired, allow requesting a new one */
+                  /* If token is invalid or expired, allow requesting a new one (only for password accounts) */
                   <form onSubmit={handleResendResetLink} className="space-y-3 pt-1">
                     <p className="text-xs text-slate-400">
                       You can request a new password reset link below:
@@ -417,6 +591,7 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
                     </button>
                   </form>
                 ) : (
+                  /* Standard Password-based user form */
                   <form onSubmit={handleConfirmPasswordReset} className="space-y-4">
                     {targetEmail && (
                       <div className="p-3 rounded-lg bg-[#161B26] border border-[#1E2333] text-xs flex items-center justify-between text-slate-300">
@@ -487,7 +662,41 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
             {/* Body: Email Verification View */}
             {mode === 'verifyEmail' && !success && (
               <div className="py-4 space-y-3">
-                {isLoading ? (
+                {isGoogleProviderUser ? (
+                  /* GOOGLE SSO USER DETECTED: Specifically hide the Email Verification section & trigger */
+                  <div className="space-y-4 pt-1">
+                    <div className="p-4 rounded-xl bg-sky-950/40 border border-sky-800/50 space-y-3">
+                      <div className="flex items-center gap-2.5 text-sky-400 font-semibold text-xs">
+                        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                          <path
+                            fill="#4285F4"
+                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                          />
+                          <path
+                            fill="#EA4335"
+                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                          />
+                        </svg>
+                        <span>Google Identity Provider (providerId: google.com)</span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        This account is authenticated through <strong>Google Identity SSO</strong> (<code>providerId: google.com</code>).
+                      </p>
+                      <div className="flex items-start gap-2 text-[11px] text-slate-400 bg-[#07080B]/50 p-2.5 rounded-lg border border-sky-900/30">
+                        <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                        <span>Google SSO accounts are pre-verified by Google. Manual email verification sections and dispatch triggers are disabled for OAuth accounts.</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : isLoading ? (
                   <div className="py-6 flex flex-col items-center justify-center gap-3 text-slate-400 text-xs">
                     <RefreshCw className="w-6 h-6 animate-spin text-emerald-400" />
                     <span>Verifying email address with Firebase...</span>

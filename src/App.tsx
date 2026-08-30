@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, LayoutGroup } from 'motion/react';
 import { Navbar, NavTab } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
 import { IssuesView } from './components/IssuesView';
@@ -308,94 +308,100 @@ function AppContent() {
         onSignOut={handleSignOut}
       />
 
-      {/* Main Content Area with Seamless Page Transition */}
+      {/* Main Content Area with Seamless Page Transition & Shared-Element Morphing */}
       <main className="relative z-10 flex-1 w-full px-4 sm:px-6 py-4 flex flex-col overflow-y-auto overflow-x-hidden">
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={currentView}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-            className="flex-1 flex flex-col w-full"
-          >
-            {currentView === 'dashboard' && (
-              <DashboardView
-                investigations={investigations}
-                onOpenInvestigation={handleOpenInvestigation}
-                onNewInvestigation={() => setCurrentView('issues')}
-                onOpenExplorer={() => setCurrentView('explorer')}
-                onNavigateToIssues={() => setCurrentView('issues')}
-                onSelectIssue={(issue) => {
-                  setSelectedIssueId(issue.id);
-                  setCurrentView('issues');
-                }}
-                onUploadAndScanFiles={(files, name, error, repo) =>
-                  handleUploadAndScanFiles(files, name, error, repo)
-                }
-                onConnectGitHub={() => {
-                  setCurrentView('dashboard');
-                }}
-              />
-            )}
+        <LayoutGroup id="bugforge-app-views">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={currentView}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ 
+                duration: 0.24, 
+                ease: [0.22, 1, 0.36, 1],
+                layout: { duration: 0.28, ease: [0.22, 1, 0.36, 1] }
+              }}
+              className="flex-1 flex flex-col w-full"
+            >
+              {currentView === 'dashboard' && (
+                <DashboardView
+                  investigations={investigations}
+                  onOpenInvestigation={handleOpenInvestigation}
+                  onNewInvestigation={() => setCurrentView('issues')}
+                  onOpenExplorer={() => setCurrentView('explorer')}
+                  onNavigateToIssues={() => setCurrentView('issues')}
+                  onSelectIssue={(issue) => {
+                    setSelectedIssueId(issue.id);
+                    setCurrentView('issues');
+                  }}
+                  onUploadAndScanFiles={(files, name, error, repo) =>
+                    handleUploadAndScanFiles(files, name, error, repo)
+                  }
+                  onConnectGitHub={() => {
+                    setCurrentView('dashboard');
+                  }}
+                />
+              )}
 
-            {currentView === 'issues' && (
-              <IssuesView
-                currentUser={currentUser}
-                initialSelectedIssueId={selectedIssueId}
-                onOpenInExplorer={handleOpenInExplorer}
-                onGoToDashboard={() => setCurrentView('dashboard')}
-                activeInvestigation={activeInvestigation}
-                investigations={investigations}
-                onSelectInvestigation={(inv) => {
-                  setActiveInvestigation(inv);
-                }}
-                onVerifyFix={handleVerifyFix}
-                isVerifying={isVerifying}
-                onExportReport={() => setIsReportModalOpen(true)}
-                onUploadAndScanFiles={handleUploadAndScanFiles}
-              />
-            )}
+              {currentView === 'issues' && (
+                <IssuesView
+                  currentUser={currentUser}
+                  initialSelectedIssueId={selectedIssueId}
+                  onOpenInExplorer={handleOpenInExplorer}
+                  onGoToDashboard={() => setCurrentView('dashboard')}
+                  activeInvestigation={activeInvestigation}
+                  investigations={investigations}
+                  onSelectInvestigation={(inv) => {
+                    setActiveInvestigation(inv);
+                  }}
+                  onVerifyFix={handleVerifyFix}
+                  isVerifying={isVerifying}
+                  onExportReport={() => setIsReportModalOpen(true)}
+                  onUploadAndScanFiles={handleUploadAndScanFiles}
+                />
+              )}
 
-            {currentView === 'explorer' && (
-              <ExplorerView
-                files={projectFiles}
-                investigation={activeInvestigation}
-                selectedFilePath={explorerFile}
-                selectedFileLine={explorerLine}
-                onSelectFile={(path, line) => {
-                  setExplorerFile(path);
-                  setExplorerLine(line);
-                }}
-                onOpenInvestigation={() => {
-                  setCurrentView('issues');
-                }}
-                onNewInvestigation={() => setCurrentView('issues')}
-                onGoToDashboard={() => setCurrentView('dashboard')}
-              />
-            )}
+              {currentView === 'explorer' && (
+                <ExplorerView
+                  files={projectFiles}
+                  investigation={activeInvestigation}
+                  selectedFilePath={explorerFile}
+                  selectedFileLine={explorerLine}
+                  onSelectFile={(path, line) => {
+                    setExplorerFile(path);
+                    setExplorerLine(line);
+                  }}
+                  onOpenInvestigation={() => {
+                    setCurrentView('issues');
+                  }}
+                  onNewInvestigation={() => setCurrentView('issues')}
+                  onGoToDashboard={() => setCurrentView('dashboard')}
+                />
+              )}
 
-            {currentView === 'history' && (
-              <HistoryView
-                investigations={investigations}
-                onOpenInvestigation={handleOpenInvestigation}
-                onNewInvestigation={() => setCurrentView('issues')}
-                onClearHistory={() => {
-                  setInvestigations([]);
-                  setActiveInvestigation(null);
-                  localStorage.removeItem(STORAGE_KEY);
-                }}
-              />
-            )}
+              {currentView === 'history' && (
+                <HistoryView
+                  investigations={investigations}
+                  onOpenInvestigation={handleOpenInvestigation}
+                  onNewInvestigation={() => setCurrentView('issues')}
+                  onClearHistory={() => {
+                    setInvestigations([]);
+                    setActiveInvestigation(null);
+                    localStorage.removeItem(STORAGE_KEY);
+                  }}
+                />
+              )}
 
-            {currentView === 'settings' && (
-              <SettingsView
-                currentUser={currentUser}
-                onUpdateCurrentUser={setCurrentUser}
-              />
-            )}
-          </motion.div>
-        </AnimatePresence>
+              {currentView === 'settings' && (
+                <SettingsView
+                  currentUser={currentUser}
+                  onUpdateCurrentUser={setCurrentUser}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </LayoutGroup>
       </main>
 
       {/* Upload/New Investigation Modal */}

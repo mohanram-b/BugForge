@@ -22,6 +22,7 @@ export interface ActiveProject {
   repoUrl?: string;
   branch?: string;
   storagePath?: string;
+  lastScanAt?: string;
 }
 
 export interface User {
