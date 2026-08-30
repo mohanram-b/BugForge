@@ -60,7 +60,7 @@ export const InvestigationReportModal: React.FC<InvestigationReportModalProps> =
     executionTimeMs: 380,
   };
 
-  const markdownReport = `# BUGFORGE FORENSIC INVESTIGATION REPORT
+  const markdownReport = `# BUGSYNAPSE FORENSIC INVESTIGATION REPORT
 **Incident ID:** ${investigation.id}
 **Project:** ${investigation.project || 'Project'}
 **Service:** ${investigation.service || 'Service'}
@@ -130,7 +130,7 @@ ${recommendedFix.whyFix}
 - **Test Results:** ${(verification.testCases || []).map((tc) => `\n  - [${tc.afterStatus}] ${tc.name} (${tc.durationMs}ms)`).join('')}
 
 ---
-*Report generated autonomously by BUGFORGE Forensic AI Engine v2.4.*
+*Report generated autonomously by BUGSYNAPSE Forensic AI Engine v2.4.*
 `;
 
   const handleCopy = () => {
@@ -144,7 +144,7 @@ ${recommendedFix.whyFix}
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `BUGFORGE-Report-${investigation.id}.md`;
+    a.download = `BUGSYNAPSE-Report-${investigation.id}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -155,7 +155,7 @@ ${recommendedFix.whyFix}
     setIsExportingPdf(true);
     try {
       await exportInvestigationPdf(investigation, {
-        filename: `BUGFORGE-Report-${investigation.id}.pdf`,
+        filename: `BUGSYNAPSE-Report-${investigation.id}.pdf`,
       });
     } catch (err) {
       console.error('Failed to export PDF:', err);

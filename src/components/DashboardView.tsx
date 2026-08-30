@@ -710,7 +710,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </div>
 
                 <p className="text-xs text-[#8B949E] leading-relaxed">
-                  This will remove the project from your BUGFORGE workspace, including its indexed files and project-specific analysis.
+                  This will remove the project from your BUGSYNAPSE workspace, including its indexed files and project-specific analysis.
                 </p>
 
                 <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1E2333]">
@@ -755,7 +755,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* Header Section */}
         <div className="mb-8">
           <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-2">
-            BUGFORGE
+            BUGSYNAPSE
           </h1>
           <h2 className="text-base sm:text-lg font-medium text-[#C9D1D9] mb-1">
             Upload a project

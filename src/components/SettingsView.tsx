@@ -548,7 +548,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     Registered Gmail Account
                   </label>
                   <div className="px-3.5 py-2.5 rounded-lg bg-[#121622] border border-[#1E2333] text-[#A0AEC0] font-mono text-xs flex items-center justify-between">
-                    <span>{currentUser.email || 'developer@bugforge.ai'}</span>
+                    <span>{currentUser.email || 'developer@bugsynapse.ai'}</span>
                     <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
                       <ShieldCheck className="w-3.5 h-3.5" />
                       <span>Verified Identity</span>
@@ -629,7 +629,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="p-3 rounded-lg bg-[#121622] border border-[#1E2333] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                   <div>
                     <span className="text-slate-400 block text-[11px]">Primary Account Email:</span>
-                    <span className="text-white font-mono font-medium">{currentUser.email || 'developer@bugforge.ai'}</span>
+                    <span className="text-white font-mono font-medium">{currentUser.email || 'developer@bugsynapse.ai'}</span>
                   </div>
                   {!isEmailVerified && !isGoogleUser && (
                     <button
@@ -730,7 +730,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
 
                   <p className="text-[11px] text-[#8B949E] leading-relaxed">
-                    You are logged in with <strong>Google SSO</strong>. Your account credentials, password resets, and 2-step verifications are securely handled by Google. BugForge does not store or maintain a separate password for this account.
+                    You are logged in with <strong>Google SSO</strong>. Your account credentials, password resets, and 2-step verifications are securely handled by Google. BugSynapse does not store or maintain a separate password for this account.
                   </p>
 
                   <div className="pt-1 flex items-center gap-3">

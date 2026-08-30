@@ -10,10 +10,10 @@ export const DocsView: React.FC = () => {
           <span>Documentation & Architecture Specification</span>
         </div>
         <h1 className="text-3xl font-extrabold text-white tracking-tight">
-          BUGFORGE Forensic AI Architecture
+          BUGSYNAPSE Forensic AI Architecture
         </h1>
         <p className="text-base text-slate-300 mt-2">
-          "Traditional AI debugging reads the error. BUGFORGE understands the software around the error."
+          "Traditional AI debugging reads the error. BUGSYNAPSE understands the software around the error."
         </p>
       </div>
 
@@ -24,7 +24,7 @@ export const DocsView: React.FC = () => {
           1. The Forensic Pipeline Paradigm
         </h2>
         <p className="text-sm text-slate-300 leading-relaxed font-sans">
-          Most coding assistants fail at real-world debugging because they operate solely on the isolated error string or raw stack trace. BUGFORGE introduces a 7-stage deterministic & AI hybrid forensic pipeline:
+          Most coding assistants fail at real-world debugging because they operate solely on the isolated error string or raw stack trace. BUGSYNAPSE introduces a 7-stage deterministic & AI hybrid forensic pipeline:
         </p>
 
         <div className="space-y-2 text-xs font-mono">

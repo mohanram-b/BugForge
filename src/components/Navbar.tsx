@@ -142,7 +142,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <Shield className="w-3.5 h-3.5 transform group-hover:scale-105 transition-transform duration-150" />
           </div>
           <span className="font-bold tracking-tight text-sm text-white group-hover:text-[#F8FAFC] transition-colors">
-            BUGFORGE
+            BUGSYNAPSE
           </span>
         </button>
 

@@ -86,7 +86,7 @@ describe('AuthActionModal Component Tests', () => {
         ).toBeInTheDocument();
       });
 
-      expect(screen.getByText(/Proceed to BugForge/i)).toBeInTheDocument();
+      expect(screen.getByText(/Proceed to BugSynapse/i)).toBeInTheDocument();
     });
 
     it('should display error message when applyActionCode fails with auth/invalid-action-code', async () => {

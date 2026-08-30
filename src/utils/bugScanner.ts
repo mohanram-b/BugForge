@@ -159,7 +159,7 @@ import java.net.URL;
 /**
  * Reconstructed Java / Decompiled Source
  * Original source files are not available in this APK.
- * BUGFORGE is showing reconstructed/decompiled code for analysis.
+ * BUGSYNAPSE is showing reconstructed/decompiled code for analysis.
  */
 public class ApiClient {
     private static final String BASE_URL = "https://api.example.com/v1";
@@ -904,7 +904,7 @@ export function scanCodebaseForBugs(
  * Generate formatted Markdown report for the investigation.
  */
 export function generateMarkdownReport(inv: Investigation, totalFiles: number): string {
-  return `# BUGFORGE ROOT CAUSE ANALYSIS REPORT
+  return `# BUGSYNAPSE ROOT CAUSE ANALYSIS REPORT
 Generated: ${new Date().toISOString()}
 Project: ${inv.project}
 Severity: ${inv.severity}
@@ -961,7 +961,7 @@ ${inv.recommendedFix.diff}
 - Regression Check: ${inv.verification.regressionCheck}
 
 ---
-*Report produced by BugForge Software Investigator*
+*Report produced by BugSynapse Software Investigator*
 `;
 }
 
@@ -970,7 +970,7 @@ ${inv.recommendedFix.diff}
  */
 export function generateDiagnosticLog(inv: Investigation, files: Record<string, string>): string {
   const timestamp = new Date().toISOString();
-  return `[${timestamp}] [BUGFORGE-ENGINE] INVESTIGATION DIAGNOSTIC DUMP
+  return `[${timestamp}] [BUGSYNAPSE-ENGINE] INVESTIGATION DIAGNOSTIC DUMP
 ID: ${inv.id}
 PROJECT: ${inv.project}
 SEVERITY: ${inv.severity}
@@ -995,7 +995,7 @@ ${inv.timeline.map((t) => `[${t.timestamp}] [${t.type.toUpperCase()}] [${t.sourc
 ----------------- [VERIFIED FIX DIFF] -----------------
 ${inv.recommendedFix.diff}
 
-[${timestamp}] [BUGFORGE-ENGINE] DIAGNOSTIC DUMP COMPLETED
+[${timestamp}] [BUGSYNAPSE-ENGINE] DIAGNOSTIC DUMP COMPLETED
 `;
 }
 
@@ -1021,7 +1021,7 @@ export async function createFixedZipArchive(
     zip.file(filePath, content);
   }
 
-  zip.file('BUGFORGE_FIX_CHANGELOG.txt', `Fixed by BugForge:\nFile: ${fix.file}\nDescription: ${fix.description}\nImpact: ${fix.expectedImpact}\nDate: ${new Date().toISOString()}`);
+  zip.file('BUGSYNAPSE_FIX_CHANGELOG.txt', `Fixed by BugSynapse:\nFile: ${fix.file}\nDescription: ${fix.description}\nImpact: ${fix.expectedImpact}\nDate: ${new Date().toISOString()}`);
 
   return await zip.generateAsync({ type: 'blob' });
 }
@@ -1443,8 +1443,8 @@ export function extractProjectIssues(
         severity: 'CRITICAL',
         priority: 'Urgent',
         status: 'Open',
-        reporterId: 'usr_bugforge_scanner',
-        reporterName: 'BUGFORGE Static Engine',
+        reporterId: 'usr_bugsynapse_scanner',
+        reporterName: 'BUGSYNAPSE Static Engine',
         tags: ['Android', 'Manifest', 'Security', 'Permissions'],
         environment: 'Android 14 / Dalvik VM',
         rootCause: 'The AndroidManifest.xml does not declare <uses-permission android:name="android.permission.INTERNET" /> before the <application> element.',
@@ -1476,8 +1476,8 @@ export function extractProjectIssues(
           severity: 'CRITICAL',
           priority: 'Urgent',
           status: 'Open',
-          reporterId: 'usr_bugforge_scanner',
-          reporterName: 'BUGFORGE Static Engine',
+          reporterId: 'usr_bugsynapse_scanner',
+          reporterName: 'BUGSYNAPSE Static Engine',
           tags: ['Database', 'Config', 'Startup', 'Backend'],
           environment: 'Node.js LTS / Cloud Container',
           rootCause: 'Module execution sequence invokes initializeDatabase() on line ' + line + ' before dotenv / loadEnvironment().',
@@ -1510,8 +1510,8 @@ export function extractProjectIssues(
         severity: 'HIGH',
         priority: 'High',
         status: 'Open',
-        reporterId: 'usr_bugforge_scanner',
-        reporterName: 'BUGFORGE Static Engine',
+        reporterId: 'usr_bugsynapse_scanner',
+        reporterName: 'BUGSYNAPSE Static Engine',
         tags: ['Async', 'ErrorHandling', 'API', 'Routes'],
         environment: 'Express / REST Server',
         rootCause: 'Missing try/catch statement around await promise execution.',
@@ -1541,8 +1541,8 @@ export function extractProjectIssues(
       severity: 'HIGH',
       priority: 'High',
       status: 'Open',
-      reporterId: 'usr_bugforge_scanner',
-      reporterName: 'BUGFORGE Security Scanner',
+      reporterId: 'usr_bugsynapse_scanner',
+      reporterName: 'BUGSYNAPSE Security Scanner',
       tags: ['Security', 'Vulnerability', 'Secrets', 'Credentials'],
       environment: 'All Environments',
       rootCause: 'Plaintext secret string embedded in code rather than loaded from environment config.',
@@ -1568,8 +1568,8 @@ export function extractProjectIssues(
       severity: 'MEDIUM',
       priority: 'Medium',
       status: 'Open',
-      reporterId: 'usr_bugforge_scanner',
-      reporterName: 'BUGFORGE Static Engine',
+      reporterId: 'usr_bugsynapse_scanner',
+      reporterName: 'BUGSYNAPSE Static Engine',
       tags: ['Resilience', 'Logging', 'Diagnostics'],
       environment: 'Node.js / JVM Runtime',
       rootCause: 'Missing global crash hook registration in main module.',

@@ -305,7 +305,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               </div>
             </div>
             <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-white drop-shadow-sm font-mono">
-              BugForge
+              BugSynapse
             </h1>
           </div>
           <p className="text-xs text-[#8B949E] tracking-wide max-w-xs font-medium">

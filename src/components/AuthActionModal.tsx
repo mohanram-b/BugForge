@@ -208,7 +208,7 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
             authLogger.success('Apply Email Verification Action Code', {
               durationMs: duration,
             });
-            setSuccess('Your email address has been successfully verified! You now have full verified access to BugForge.');
+            setSuccess('Your email address has been successfully verified! You now have full verified access to BugSynapse.');
           })
           .catch((err) => {
             const duration = Date.now() - startTime;
@@ -452,7 +452,7 @@ export const AuthActionModal: React.FC<AuthActionModalProps> = ({ onComplete }) 
                     onClick={handleClose}
                     className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-black font-semibold text-xs cursor-pointer flex items-center gap-1.5 transition-colors"
                   >
-                    <span>Proceed to BugForge</span>
+                    <span>Proceed to BugSynapse</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
