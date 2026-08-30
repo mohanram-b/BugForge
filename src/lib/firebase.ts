@@ -17,6 +17,7 @@ import {
   checkActionCode,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   EmailAuthProvider,
   reauthenticateWithCredential,
   ActionCodeSettings,
@@ -26,9 +27,11 @@ import {
   getFirestore, 
   doc, 
   getDoc, 
+  getDocs,
   setDoc, 
   updateDoc, 
   collection, 
+  where,
   onSnapshot, 
   query, 
   orderBy, 
@@ -83,19 +86,45 @@ export {
   checkActionCode,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  fetchSignInMethodsForEmail,
   EmailAuthProvider,
   reauthenticateWithCredential,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   updateDoc,
   collection,
+  where,
   onSnapshot,
   query,
   orderBy,
   limit
 };
 export type { FirebaseUser, ActionCodeSettings };
+
+/**
+ * Resolve the dynamic application base URL, supporting local dev, Cloud Run, and production Firebase domains
+ */
+export function getAppBaseUrl(): string {
+  if (typeof window !== 'undefined' && window.location.origin && window.location.origin !== 'null') {
+    return window.location.origin;
+  }
+  return 'https://bugforge-17b81.firebaseapp.com';
+}
+
+/**
+ * Construct compliant Firebase Auth Action Code Settings ensuring continueUrl points to base production domain
+ */
+export function getActionCodeSettings(continuePath = '/'): ActionCodeSettings {
+  const baseUrl = getAppBaseUrl();
+  const cleanPath = continuePath.startsWith('/') ? continuePath : `/${continuePath}`;
+  const targetUrl = `${baseUrl}${cleanPath}`;
+  return {
+    url: targetUrl,
+    handleCodeInApp: true,
+  };
+}
 
 // Human-friendly Firebase Auth error mapper
 export function getFirebaseAuthErrorMessage(err: any): string {
@@ -178,26 +207,80 @@ export async function updateUserProfileData(
   }
 }
 
+export interface UserAuthProviderInfo {
+  isGoogleUser: boolean;
+  isPasswordUser: boolean;
+  providers: string[];
+}
+
+/**
+ * Detect whether an account email is associated with Google Identity SSO vs standard password credentials
+ */
+export async function detectEmailAuthProviders(email: string): Promise<UserAuthProviderInfo> {
+  const cleanEmail = email.trim().toLowerCase();
+  const result: UserAuthProviderInfo = {
+    isGoogleUser: false,
+    isPasswordUser: false,
+    providers: []
+  };
+
+  // 1. Check active session if email matches
+  if (auth.currentUser && auth.currentUser.email?.toLowerCase() === cleanEmail) {
+    const activeProviders = auth.currentUser.providerData.map(p => p.providerId);
+    if (activeProviders.includes('google.com')) result.isGoogleUser = true;
+    if (activeProviders.includes('password')) result.isPasswordUser = true;
+    result.providers = activeProviders;
+  }
+
+  // 2. Query Firebase Auth sign-in methods for email
+  try {
+    const methods = await fetchSignInMethodsForEmail(auth, cleanEmail);
+    if (methods && methods.length > 0) {
+      result.providers = Array.from(new Set([...result.providers, ...methods]));
+      if (methods.includes('google.com')) result.isGoogleUser = true;
+      if (methods.includes('password')) result.isPasswordUser = true;
+    }
+  } catch (err) {
+    console.warn('[Firebase] fetchSignInMethodsForEmail notice:', err);
+  }
+
+  // 3. Query Firestore users collection for additional verification
+  try {
+    const usersRef = collection(firestore, 'users');
+    const q = query(usersRef, where('email', '==', cleanEmail), limit(1));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      const userData = snap.docs[0].data() as AppUserProfile;
+      if (userData.providerId === 'google.com' || (userData as any).googleSubjectId) {
+        result.isGoogleUser = true;
+      }
+      if (userData.providerId === 'password') {
+        result.isPasswordUser = true;
+      }
+    }
+  } catch (err) {
+    console.warn('[Firebase] Firestore provider lookup note:', err);
+  }
+
+  return result;
+}
+
 /**
  * Dispatch an official Password Reset Email via Firebase Authentication
  * Awaits the actual provider response before resolving.
  */
-export async function sendAccountPasswordReset(email: string): Promise<{ success: boolean; email: string }> {
+export async function sendAccountPasswordReset(email: string, continuePath = '/'): Promise<{ success: boolean; email: string }> {
   const cleanEmail = email.trim();
   if (!cleanEmail) {
     throw new Error('Please specify a valid email address.');
   }
 
-  const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://bugforge-17b81.firebaseapp.com';
-  const actionCodeSettings: ActionCodeSettings = {
-    url: `${appOrigin}/`,
-    handleCodeInApp: true,
-  };
+  const actionCodeSettings = getActionCodeSettings(continuePath);
 
   try {
-    // Attempt with ActionCodeSettings for smooth in-app redirection
+    // Attempt with ActionCodeSettings for smooth in-app redirection to production URL
     await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
-    console.info(`[Firebase Auth] Password reset email successfully accepted by provider for: ${cleanEmail}`);
+    console.info(`[Firebase Auth] Password reset email successfully accepted for: ${cleanEmail} (continueUrl: ${actionCodeSettings.url})`);
     return { success: true, email: cleanEmail };
   } catch (firstErr: any) {
     // If domain or action code settings failed, attempt standard fallback
@@ -219,21 +302,17 @@ export async function sendAccountPasswordReset(email: string): Promise<{ success
 /**
  * Dispatch an official Email Verification message to the currently logged in user
  */
-export async function sendUserEmailVerification(): Promise<{ success: boolean; email: string }> {
+export async function sendUserEmailVerification(continuePath = '/'): Promise<{ success: boolean; email: string }> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.email) {
     throw new Error('No authenticated user session found to verify.');
   }
 
-  const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://bugforge-17b81.firebaseapp.com';
-  const actionCodeSettings: ActionCodeSettings = {
-    url: `${appOrigin}/`,
-    handleCodeInApp: true,
-  };
+  const actionCodeSettings = getActionCodeSettings(continuePath);
 
   try {
     await sendEmailVerification(currentUser, actionCodeSettings);
-    console.info(`[Firebase Auth] Email verification message accepted by provider for: ${currentUser.email}`);
+    console.info(`[Firebase Auth] Email verification message accepted for: ${currentUser.email} (continueUrl: ${actionCodeSettings.url})`);
     return { success: true, email: currentUser.email };
   } catch (firstErr: any) {
     if (firstErr?.code === 'auth/unauthorized-continue-uri' || firstErr?.code === 'auth/invalid-continue-uri') {
